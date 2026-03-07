@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pdeflow"
+version = "0.1.0"
+description = "Autonomous scientific research agent system for PDE neural operator research."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "openai-agents>=0.2.0",
+  "pydantic>=2.8.2",
+  "httpx>=0.28.1",
+  "pypdf>=5.4.0",
+  "python-dotenv>=1.0.1",
+]
+
+[project.scripts]
+pdeflow = "pdeflow.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pdeflow"]
+
+[tool.uv]
+package = true

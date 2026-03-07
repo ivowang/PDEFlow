@@ -1,0 +1,76 @@
+{
+  "project_name": "autonomous-pde-research",
+  "run_name": "pde_operator_research",
+  "output_root": "runs",
+  "research_brief": {
+    "title": "Autonomous PDE Neural Operator Research",
+    "question": "Given the AI4Science PDE neural operator competition setting, autonomously discover relevant literature, repositories, datasets, checkpoints, baselines, and methods; then design, implement, execute, evaluate, and iteratively refine scientifically meaningful improvements.",
+    "background": "The current target problem is PDE neural operator research for short-window prediction under explicit physics participation constraints. The system should behave as an independent research engineer and scientific agent, not as a baseline-only tuner.",
+    "objectives": [
+      "Autonomously retrieve and synthesize related work.",
+      "Autonomously discover runnable repos, data, and checkpoints.",
+      "Distinguish method innovation from engineering tuning.",
+      "Generate and test new hypotheses grounded in evidence.",
+      "Maintain research memory, program lineage, and reports."
+    ],
+    "constraints": [
+      "The system must use physics information in training or inference when the task requires it.",
+      "The system should decide what assets and commands are needed instead of relying on hand-coded benchmark assumptions.",
+      "GPU preference is 6 and 7 when available.",
+      "Experiment duration should be chosen by the agent through commands and stopping rules, not by a fixed wall-clock cap."
+    ],
+    "deliverables": [
+      "Literature review notes",
+      "Acquisition report",
+      "Hypothesis and idea diary",
+      "Experiment logs and structured metrics",
+      "Final research report"
+    ],
+    "domain_tags": [
+      "scientific machine learning",
+      "neural operators",
+      "PDEs",
+      "AI4Science"
+    ]
+  },
+  "runtime": {
+    "backend": "openai_agents",
+    "model": "gpt-4.1"
+  },
+  "retrieval": {
+    "paper_search_backend": "arxiv",
+    "repository_search_backend": "github",
+    "http_timeout_seconds": 60,
+    "max_search_results": 10
+  },
+  "execution": {
+    "network_enabled": true,
+    "auto_bootstrap_environments": true,
+    "allow_shell_commands": true,
+    "allow_package_installation": true,
+    "workspace_root": "external_assets"
+  },
+  "resource_policy": {
+    "preferred_gpu_ids": [6, 7],
+    "gpu_inventory_hint": {
+      "6": "A800 40GB",
+      "7": "A800 40GB"
+    },
+    "auto_decide_runtime": true,
+    "allow_unbounded_runtime": true,
+    "max_parallel_experiments": 2
+  },
+  "secrets": [
+    {
+      "env_var": "OPENAI_API_KEY",
+      "purpose": "OpenAI Agents SDK runtime and tool-using specialist agents.",
+      "required": true
+    },
+    {
+      "env_var": "GITHUB_TOKEN",
+      "purpose": "Optional higher GitHub API rate limits for repository discovery.",
+      "required": false
+    }
+  ],
+  "manager_safety_max_cycles": null
+}
