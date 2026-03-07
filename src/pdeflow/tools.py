@@ -46,8 +46,46 @@ class ResearchTools:
         self.shared_workspace_root = ensure_dir(resolved_shared_root)
         self.run_workspace_root = ensure_dir(memory.root / "workspaces")
 
+    def _progress_message_for_tool_event(self, tool_name: str, payload: dict[str, Any]) -> str | None:
+        if tool_name == "search_arxiv_papers":
+            return f"Tool search_arxiv_papers finished. query='{payload.get('query', '')}' results={payload.get('count', 0)}."
+        if tool_name == "search_github_repositories":
+            return f"Tool search_github_repositories finished. query='{payload.get('query', '')}' results={payload.get('count', 0)}."
+        if tool_name == "fetch_url_text":
+            return f"Fetched remote text from {payload.get('url', '')}."
+        if tool_name == "download_file":
+            return f"Downloaded file to {payload.get('path', '')}."
+        if tool_name == "extract_pdf_text":
+            return f"Extracted PDF text from {payload.get('path', '')}."
+        if tool_name == "clone_repository":
+            return f"Repository available at {payload.get('path', '')} from {payload.get('repo_url', '')}."
+        if tool_name == "detect_project_manifests":
+            return f"Detected project manifests in {payload.get('path', '')}. count={len(payload.get('manifests', []))}."
+        if tool_name == "bootstrap_python_environment":
+            return f"Environment bootstrap finished for {payload.get('project_path', '')} with status={payload.get('status', 'unknown')}."
+        if tool_name == "copy_tree":
+            return f"Created child workspace at {payload.get('destination', '')}."
+        if tool_name == "write_patch_file":
+            return f"Wrote patch file {payload.get('path', '')}."
+        if tool_name == "apply_patch_file":
+            return f"Applied patch in {payload.get('cwd', '')} with returncode={payload.get('returncode', 'unknown')}."
+        if tool_name == "parse_metrics_file":
+            return f"Parsed metrics from {payload.get('path', '')}."
+        if tool_name == "write_report":
+            return f"Wrote report {payload.get('path', '')}."
+        if tool_name == "run_command":
+            if payload.get("emit_progress") is False:
+                return None
+            command = str(payload.get("command", "")).strip()
+            compact = command if len(command) <= 140 else command[:137] + "..."
+            return f"Command completed with returncode={payload.get('returncode', 'unknown')}: {compact}"
+        return None
+
     def _record_tool_event(self, tool_name: str, payload: dict[str, Any]) -> None:
         self.memory.record_tool_event({"tool": tool_name, "timestamp": now_utc(), **payload})
+        progress_message = self._progress_message_for_tool_event(tool_name, payload)
+        if progress_message:
+            self.memory.record_process(progress_message)
 
     def _allowed_roots(self) -> list[Path]:
         return [
@@ -84,10 +122,11 @@ class ResearchTools:
     def inspect_compute_environment(self) -> EnvironmentSnapshot:
         python_executable = sys.executable
         python_version = sys.version.split()[0]
-        uv_result = self.run_command("uv --version", allow_failure=True)
+        uv_result = self.run_command("uv --version", allow_failure=True, emit_progress=False)
         gpu_result = self.run_command(
             "nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader",
             allow_failure=True,
+            emit_progress=False,
         )
         available_gpu_ids: list[int] = []
         gpu_descriptions: dict[str, str] = {}
@@ -435,6 +474,7 @@ class ResearchTools:
         gpu_ids: list[int] | None = None,
         log_path: str | None = None,
         allow_failure: bool = False,
+        emit_progress: bool = True,
     ) -> dict[str, Any]:
         if not self.config.execution.allow_shell_commands:
             raise RuntimeError("Shell command execution is disabled in the current config.")
@@ -450,6 +490,12 @@ class ResearchTools:
             env.update(env_overrides)
         if gpu_ids:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu_id) for gpu_id in gpu_ids)
+        if emit_progress:
+            gpu_text = f" on GPUs {gpu_ids}" if gpu_ids else ""
+            compact = command if len(command) <= 140 else command[:137] + "..."
+            self.memory.record_process(
+                f"Running command{gpu_text} in {working_directory}: {compact}"
+            )
         process = subprocess.Popen(
             shlex.split(command),
             cwd=str(working_directory),
@@ -473,6 +519,7 @@ class ResearchTools:
             "stdout_tail": stdout_tail,
             "stderr_tail": "" if return_code == 0 else stdout_tail,
             "log_path": str(log_file),
+            "emit_progress": emit_progress,
         }
         self._record_tool_event("run_command", result)
         if return_code != 0 and not allow_failure:

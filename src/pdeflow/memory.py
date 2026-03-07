@@ -18,7 +18,7 @@ from .schemas import (
     ResearchState,
     SecretStatus,
 )
-from .utils import append_jsonl, ensure_dir, to_plain_data, write_json
+from .utils import append_jsonl, ensure_dir, now_utc, to_plain_data, write_json
 
 
 class ResearchMemory:
@@ -26,6 +26,7 @@ class ResearchMemory:
 
     def __init__(self, root: Path):
         self.root = ensure_dir(root)
+        self.process_path = self.root / "process.txt"
         self.state_dir = ensure_dir(root / "state")
         self.logs_dir = ensure_dir(root / "logs")
         self.memory_dir = ensure_dir(root / "memory")
@@ -39,6 +40,10 @@ class ResearchMemory:
         self.sessions_db = self.state_dir / "agents_sessions.sqlite"
         self.program_db_path = self.programs_dir / "program_db.sqlite3"
         self._init_program_db()
+        self.record_process(
+            f"Initialized research workspace at {self.root}.",
+            print_to_terminal=False,
+        )
 
     def _init_program_db(self) -> None:
         with sqlite3.connect(self.program_db_path) as conn:
@@ -115,6 +120,14 @@ class ResearchMemory:
 
     def record_tool_event(self, payload: dict[str, Any]) -> None:
         append_jsonl(self.logs_dir / "tool_events.jsonl", payload)
+
+    def record_process(self, message: str, print_to_terminal: bool = True) -> None:
+        ensure_dir(self.process_path.parent)
+        line = f"[{now_utc()}] {message}"
+        with self.process_path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+        if print_to_terminal:
+            print(line, flush=True)
 
     def register_program(self, candidate: ProgramCandidate) -> None:
         payload = to_plain_data(candidate)

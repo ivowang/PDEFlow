@@ -121,6 +121,8 @@ The intended convention is that all research content for a run stays inside the 
 - state snapshots and memory
 - research reports
 
+Live progress is also written to `<work_directory>/process.txt` and printed to the terminal during execution.
+
 ## Key Files
 
 - [config.py](src/pdeflow/config.py): config schema
