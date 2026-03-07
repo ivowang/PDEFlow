@@ -22,7 +22,7 @@ Optional:
 
 - `GITHUB_TOKEN` for higher GitHub API rate limits
 
-3. Edit the research problem in [research_problem.json](/root/PDEFlow/configs/research_problem.json).
+3. Edit the research problem in [research_problem.json](configs/research_problem.json).
 
 4. Run the system:
 
@@ -96,13 +96,13 @@ Shared external assets are stored in `external_assets/`.
 
 ## Key Files
 
-- [config.py](/root/PDEFlow/src/pdeflow/config.py): config schema
-- [schemas.py](/root/PDEFlow/src/pdeflow/schemas.py): state and memory schema
-- [tools.py](/root/PDEFlow/src/pdeflow/tools.py): executable tool surface
-- [agents.py](/root/PDEFlow/src/pdeflow/agents.py): specialist agents
-- [orchestration.py](/root/PDEFlow/src/pdeflow/orchestration.py): manager loop
-- [memory.py](/root/PDEFlow/src/pdeflow/memory.py): JSONL and SQLite memory
-- [runtime.py](/root/PDEFlow/src/pdeflow/runtime.py): OpenAI Agents SDK runtime adapter
+- [config.py](src/pdeflow/config.py): config schema
+- [schemas.py](src/pdeflow/schemas.py): state and memory schema
+- [tools.py](src/pdeflow/tools.py): executable tool surface
+- [agents.py](src/pdeflow/agents.py): specialist agents
+- [orchestration.py](src/pdeflow/orchestration.py): manager loop
+- [memory.py](src/pdeflow/memory.py): JSONL and SQLite memory
+- [runtime.py](src/pdeflow/runtime.py): OpenAI Agents SDK runtime adapter
 
 ## Notes
 
@@ -114,7 +114,7 @@ Shared external assets are stored in `external_assets/`.
 
 A paper-style system description is provided in:
 
-- [pdeflow_system.tex](/root/PDEFlow/docs/pdeflow_system.tex)
-- [references.bib](/root/PDEFlow/docs/references.bib)
+- [pdeflow_system.tex](docs/pdeflow_system.tex)
+- [references.bib](docs/references.bib)
 
 If a LaTeX toolchain is installed locally, compile from `docs/` with `pdflatex`, `bibtex`, and `pdflatex` twice.
