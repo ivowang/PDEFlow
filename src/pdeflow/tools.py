@@ -34,7 +34,16 @@ class ResearchTools:
         self.config = config
         self.memory = memory
         self.repo_root = repo_root.resolve()
-        self.shared_workspace_root = ensure_dir((repo_root / config.execution.workspace_root).resolve())
+        shared_root = Path(config.execution.workspace_root)
+        if shared_root.is_absolute():
+            resolved_shared_root = shared_root.resolve()
+        else:
+            resolved_shared_root = (memory.root / shared_root).resolve()
+        if not str(resolved_shared_root).startswith(str(memory.root.resolve())):
+            raise ValueError(
+                "execution.workspace_root must resolve inside execution.work_directory."
+            )
+        self.shared_workspace_root = ensure_dir(resolved_shared_root)
         self.run_workspace_root = ensure_dir(memory.root / "workspaces")
 
     def _record_tool_event(self, tool_name: str, payload: dict[str, Any]) -> None:

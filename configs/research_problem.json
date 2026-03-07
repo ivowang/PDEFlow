@@ -1,7 +1,6 @@
 {
   "project_name": "autonomous-pde-research",
   "run_name": "pde_operator_research",
-  "output_root": "runs",
   "research_brief": {
     "title": "Autonomous PDE Neural Operator Research",
     "question": "Given the AI4Science PDE neural operator competition setting, autonomously discover relevant literature, repositories, datasets, checkpoints, baselines, and methods; then design, implement, execute, evaluate, and iteratively refine scientifically meaningful improvements.",
@@ -36,7 +35,7 @@
   "runtime": {
     "backend": "openai_agents",
     "provider": "openai",
-    "model": "gpt-4.1",
+    "model": "gpt-5.4",
     "api_key_env_var": "OPENAI_API_KEY",
     "tracing_disabled": true
   },
@@ -51,6 +50,7 @@
     "auto_bootstrap_environments": true,
     "allow_shell_commands": true,
     "allow_package_installation": true,
+    "work_directory": "runs/{run_name}",
     "workspace_root": "external_assets"
   },
   "resource_policy": {

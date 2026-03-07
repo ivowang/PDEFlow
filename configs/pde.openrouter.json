@@ -1,0 +1,107 @@
+{
+  "project_name": "ai4s-cns-pde-agent",
+  "run_name": "pde_1",
+  "research_brief": {
+    "title": "AI4S CNS Challenge Task 4: Neural Operator PDE Agent",
+    "question": "Build an autonomous scientific agent that can independently complete the PDE neural-operator research loop for the AI4S CNS Challenge Task 4, including literature understanding, bottleneck diagnosis, method innovation, code evolution, experiment execution, physical validation, and report generation.",
+    "background": "The challenge targets PDE neural operators as a scientific-agent problem rather than a static model-submission problem. The system should autonomously study PDEBench and representative neural-operator methods such as DeepONet, FNO, PI-DeepONet, PINN, and related physics-aware operator-learning approaches; identify weaknesses in existing baselines; acquire required repositories, datasets, and checkpoints; and iteratively improve methods through executable scientific workflows. The competition emphasizes autonomous research capability under CNS-style scientific standards, with particular focus on PDEBench 1D tasks where physical information must participate in training or inference.",
+    "objectives": [
+      "Autonomously retrieve and synthesize literature on PDEBench, neural operators, physics-informed operator learning, and related PDE scientific ML methods.",
+      "Autonomously discover, download, inspect, and bootstrap the repositories, datasets, checkpoints, and documentation needed to run realistic PDE neural-operator experiments.",
+      "Diagnose bottlenecks in PDEBench 1D baselines for short-window prediction, especially around physical consistency, parameter sensitivity, and method-level limitations beyond local tuning.",
+      "Generate and test literature-grounded hypotheses that introduce scientifically meaningful method innovations rather than only hyperparameter optimization.",
+      "Implement code changes, run experiments on the target tasks, analyze logs and metrics, and maintain interpretable research memory and reports."
+    ],
+    "constraints": [
+      "The benchmark focus is PDEBench 1D.",
+      "The target tasks are 1D Burgers short-window prediction and 1D Diffusion-Reaction short-window prediction.",
+      "Short-term predictive accuracy is the primary task metric.",
+      "Physical information must participate in training or inference.",
+      "The system may load official PDEBench checkpoints for finetuning when useful.",
+      "The system should distinguish method innovation from engineering tuning.",
+      "Evaluation should consider scientific performance, computational economy, and evolution-logic rigor.",
+      "The system should operate autonomously after receiving the research brief, with minimal manual intervention.",
+      "Experiments should preferentially use local GPUs 6 and 7, both A800 40GB.",
+      "All downloaded data, generated code, experiment outputs, logs, and reports must remain under /data0/ziyi/PDEFlow_Runs."
+    ],
+    "deliverables": [
+      "Structured literature review notes and method taxonomy",
+      "Acquisition logs for datasets, repositories, checkpoints, and environments",
+      "Bottleneck analysis and candidate research directions",
+      "Hypothesis records and method-design artifacts",
+      "Executable child-program workspaces and experiment plans",
+      "Experiment logs, parsed metrics, and failure analysis",
+      "Reflection records and next-step decisions",
+      "Stage reports and a final research report"
+    ],
+    "domain_tags": [
+      "AI4Science",
+      "scientific agents",
+      "scientific machine learning",
+      "neural operators",
+      "PDEBench",
+      "PDEs",
+      "physics-informed learning"
+    ]
+  },
+  "runtime": {
+    "backend": "openai_agents",
+    "provider": "openrouter",
+    "model": "openai/gpt-5.4",
+    "api_key_env_var": "OPENROUTER_API_KEY",
+    "api_base_url": "https://openrouter.ai/api/v1",
+    "use_responses_api": false,
+    "tracing_disabled": true,
+    "openrouter_app_name": "PDEFlow"
+  },
+  "retrieval": {
+    "paper_search_backend": "arxiv",
+    "repository_search_backend": "github",
+    "http_timeout_seconds": 60,
+    "max_search_results": 10
+  },
+  "execution": {
+    "network_enabled": true,
+    "auto_bootstrap_environments": true,
+    "allow_shell_commands": true,
+    "allow_package_installation": true,
+    "work_directory": "/data0/ziyi/PDEFlow_Runs/pde_1",
+    "workspace_root": "external_assets"
+  },
+  "resource_policy": {
+    "preferred_gpu_ids": [
+      6,
+      7
+    ],
+    "gpu_inventory_hint": {
+      "6": "A800 40GB",
+      "7": "A800 40GB"
+    },
+    "auto_decide_runtime": true,
+    "allow_unbounded_runtime": true,
+    "max_parallel_experiments": 2
+  },
+  "secrets": [
+    {
+      "env_var": "OPENROUTER_API_KEY",
+      "purpose": "OpenRouter API key for OpenAI-compatible model access through the Agents SDK.",
+      "required": true
+    },
+    {
+      "env_var": "OPENROUTER_SITE_URL",
+      "purpose": "Optional OpenRouter referer metadata.",
+      "required": false
+    },
+    {
+      "env_var": "OPENROUTER_APP_NAME",
+      "purpose": "Optional OpenRouter app title metadata.",
+      "required": false
+    },
+    {
+      "env_var": "GITHUB_TOKEN",
+      "purpose": "Optional higher GitHub API rate limits for repository discovery.",
+      "required": false
+    }
+  ],
+  "manager_safety_max_cycles": null
+}

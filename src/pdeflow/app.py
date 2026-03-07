@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     manager = ResearchManager(config=config, repo_root=repo_root)
     state = manager.run()
     print(f"Run completed: {state.run_name}")
-    print(f"Output root: {repo_root / config.output_root / config.run_name}")
+    print(f"Work directory: {state.work_directory}")
     print(f"Cycles completed: {state.cycle_index}")
     print(f"Repositories discovered: {len(state.repositories)}")
     print(f"Programs tracked: {len(state.program_candidates)}")

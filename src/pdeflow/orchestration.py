@@ -36,7 +36,8 @@ class ResearchManager:
     def __init__(self, config: SystemConfig, repo_root: Path):
         self.config = config
         self.repo_root = repo_root
-        self.memory = ResearchMemory(root=repo_root / config.output_root / config.run_name)
+        self.work_directory = config.resolve_work_directory(repo_root)
+        self.memory = ResearchMemory(root=self.work_directory)
         self.tools = ResearchTools(config=config, memory=self.memory, repo_root=repo_root)
         self.runtime = RuntimeAdapter(
             runtime_config=config.runtime,
@@ -75,6 +76,7 @@ class ResearchManager:
         state = ResearchState(
             project_name=self.config.project_name,
             run_name=self.config.run_name,
+            work_directory=str(self.work_directory),
             research_brief=self.config.research_brief,
         )
         self.memory.save_state(state, label="initial_state")

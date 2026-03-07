@@ -216,6 +216,7 @@ class DiaryEntry(BaseModel):
 class ResearchState(BaseModel):
     project_name: str
     run_name: str
+    work_directory: str
     research_brief: ResearchBriefConfig
     current_phase: ResearchPhase = ResearchPhase.LITERATURE_REVIEW
     phase_history: list[str] = Field(default_factory=list)

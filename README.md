@@ -30,6 +30,11 @@ Optional:
 
 3. Edit the research problem in [research_problem.json](configs/research_problem.json).
 
+Important fields in `execution`:
+
+- `work_directory`: the root working directory for a research run
+- `workspace_root`: subdirectory inside `work_directory` used for downloaded assets and cloned repos
+
 4. Run the system:
 
 ```bash
@@ -93,7 +98,7 @@ The design is manager-centered. Specialist agents do not freely chat with each o
 
 ## Outputs
 
-Run artifacts are written to `runs/<run_name>/`:
+Run artifacts are written under `execution.work_directory`:
 
 - `state/`: structured state snapshots
 - `logs/`: command logs and tool events
@@ -104,7 +109,17 @@ Run artifacts are written to `runs/<run_name>/`:
 - `reports/`: generated markdown reports
 - `workspaces/`: child program workspaces
 
-Shared external assets are stored in `external_assets/`.
+Downloaded datasets, cloned repositories, checkpoints, and other acquired assets are stored under
+`<work_directory>/<workspace_root>/`.
+
+The intended convention is that all research content for a run stays inside the configured
+`work_directory`, including:
+
+- downloaded assets
+- generated code
+- experiment logs and outputs
+- state snapshots and memory
+- research reports
 
 ## Key Files
 
@@ -123,6 +138,7 @@ Shared external assets are stored in `external_assets/`.
 - OpenRouter is wired through the OpenAI-compatible path in the Agents SDK and defaults to `chat_completions`.
 - The current repository is live-only. There is no mock runtime.
 - The system uses real shell commands, downloads, repo cloning, and environment setup, so it should be run on a controlled research machine.
+- `execution.workspace_root` is enforced to live inside `execution.work_directory`.
 
 ## Paper Draft
 

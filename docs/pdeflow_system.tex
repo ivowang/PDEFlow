@@ -201,6 +201,8 @@ The memory layer stores:
 
 Program lineage is stored in SQLite so that parent-child relationships, evaluated candidates, and outcomes can be queried independently of the current run state.
 
+In the current implementation, each run is anchored to a configured working directory. State snapshots, acquired assets, cloned repositories, child workspaces, experiment logs, and generated reports are all stored under that run-local root so that a research campaign remains self-contained on disk.
+
 \section{Tool Layer}
 The tool surface is a core part of the system. The current implementation supports:
 \begin{itemize}[leftmargin=1.5em]

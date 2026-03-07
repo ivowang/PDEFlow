@@ -45,6 +45,7 @@ class ExecutionConfig(BaseModel):
     auto_bootstrap_environments: bool = True
     allow_shell_commands: bool = True
     allow_package_installation: bool = True
+    work_directory: str = "runs/{run_name}"
     workspace_root: str = "external_assets"
 
 
@@ -78,3 +79,13 @@ class SystemConfig(BaseModel):
     def from_file(cls, path: str | Path) -> "SystemConfig":
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.model_validate(payload)
+
+    def resolve_work_directory(self, repo_root: str | Path) -> Path:
+        root = Path(repo_root).resolve()
+        template = self.execution.work_directory or f"{self.output_root}/{self.run_name}"
+        rendered = template.format(
+            project_name=self.project_name,
+            run_name=self.run_name,
+        )
+        path = Path(rendered)
+        return path.resolve() if path.is_absolute() else (root / path).resolve()
