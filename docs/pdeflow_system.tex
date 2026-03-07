@@ -98,7 +98,7 @@ The runtime is built on the OpenAI Agents SDK \cite{openai_agents_sdk}. Each spe
   \item a persistent session identifier.
 \end{itemize}
 
-Structured outputs are implemented with Pydantic models, which keeps phase outputs machine-readable and easy to merge into shared state.
+Structured outputs are implemented with Pydantic models, which keeps phase outputs machine-readable and easy to merge into shared state. In the current implementation, the runtime can be configured either for direct OpenAI access or for OpenRouter through the SDK's OpenAI-compatible provider path, allowing users without an OpenAI account to run the same workflow against an alternate model endpoint.
 
 \subsection{Manager}
 The manager is responsible for:

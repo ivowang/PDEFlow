@@ -20,7 +20,17 @@ class ResearchBriefConfig(BaseModel):
 
 class RuntimeConfig(BaseModel):
     backend: str = "openai_agents"
+    provider: str = "openai"
     model: str = "gpt-4.1"
+    api_key_env_var: str | None = None
+    api_base_url: str | None = None
+    websocket_base_url: str | None = None
+    organization: str | None = None
+    project: str | None = None
+    use_responses_api: bool | None = None
+    tracing_disabled: bool = True
+    openrouter_site_url: str | None = None
+    openrouter_app_name: str | None = None
 
 
 class RetrievalConfig(BaseModel):

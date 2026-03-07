@@ -39,8 +39,7 @@ class ResearchManager:
         self.memory = ResearchMemory(root=repo_root / config.output_root / config.run_name)
         self.tools = ResearchTools(config=config, memory=self.memory, repo_root=repo_root)
         self.runtime = RuntimeAdapter(
-            backend=config.runtime.backend,
-            model=config.runtime.model,
+            runtime_config=config.runtime,
             session_db_path=str(self.memory.sessions_db),
         )
         self.agents = {

@@ -12,15 +12,21 @@ You provide a research problem in config. The system then autonomously runs lite
 uv sync
 ```
 
-2. Create `.env` and fill `OPENAI_API_KEY`:
+2. Create `.env` and fill the model API key you want to use:
 
 ```bash
 cp .env.example .env
 ```
 
+Choose one:
+
+- `OPENAI_API_KEY` for direct OpenAI access
+- `OPENROUTER_API_KEY` for OpenRouter access
+
 Optional:
 
 - `GITHUB_TOKEN` for higher GitHub API rate limits
+- `OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` for OpenRouter metadata headers
 
 3. Edit the research problem in [research_problem.json](configs/research_problem.json).
 
@@ -40,6 +46,12 @@ To override the run name:
 
 ```bash
 uv run python app.py --config configs/research_problem.json --run-name pde_round1
+```
+
+OpenRouter example:
+
+```bash
+uv run python app.py --config configs/research_problem.openrouter.json
 ```
 
 ## What The User Provides
@@ -106,6 +118,13 @@ Shared external assets are stored in `external_assets/`.
 
 ## Notes
 
-- `OPENAI_API_KEY` is required.
+- `runtime.provider=openai` requires `OPENAI_API_KEY`.
+- `runtime.provider=openrouter` requires `OPENROUTER_API_KEY`.
+- OpenRouter is wired through the OpenAI-compatible path in the Agents SDK and defaults to `chat_completions`.
 - The current repository is live-only. There is no mock runtime.
 - The system uses real shell commands, downloads, repo cloning, and environment setup, so it should be run on a controlled research machine.
+
+## Paper Draft
+
+- [pdeflow_system.tex](docs/pdeflow_system.tex)
+- [references.bib](docs/references.bib)
