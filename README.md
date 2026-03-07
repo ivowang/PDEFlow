@@ -2,102 +2,68 @@
 
 `PDEFlow` is a manager-centered autonomous research system for PDE neural operator research.
 
-The user provides a research problem in config. The system is then responsible for running the full research loop:
+You provide a research problem in config. The system then autonomously runs literature review, asset acquisition, method design, coding, experiments, reflection, and reporting with real tools.
 
-- retrieving and organizing literature
-- discovering repositories, datasets, checkpoints, and technical documentation
-- bootstrapping runnable environments with `uv`
-- selecting and tracking baseline programs
-- proposing literature-grounded hypotheses
-- translating hypotheses into concrete method designs
-- creating child program variants
-- planning and executing experiments
-- parsing results and reflecting on failures
-- maintaining long-horizon research memory
-- generating research reports
+## Quick Start
 
-This repository is not a chatbot wrapper and not a benchmark-specific hyperparameter tuner. It is an executable research workflow system built around structured state, tool use, and iterative program evolution.
+1. Install dependencies with `uv`:
 
-## Overview
+```bash
+uv sync
+```
 
-The initial landing problem is PDE neural operator research for AI4Science-style settings, especially scenarios where the system must autonomously reason from a high-level task description to real assets, code, and experiments. The architecture is intentionally designed so the same workflow can later be reused for broader scientific ML tasks.
+2. Create `.env` and fill `OPENAI_API_KEY`:
 
-Key properties:
+```bash
+cp .env.example .env
+```
 
-- manager-centered orchestration rather than free agent-to-agent chat
-- explicit workflow phases rather than implicit conversational drift
-- external state and local memory rather than hidden private agent memory
-- executable tools rather than fake reasoning about repos, datasets, or experiments
-- idea-level iteration rather than only local baseline tuning
-- program lineage tracking to support self-evolving research loops
+Optional:
 
-## What It Is And Is Not
+- `GITHUB_TOKEN` for higher GitHub API rate limits
 
-`PDEFlow` is:
+3. Edit the research problem in [research_problem.json](/root/PDEFlow/configs/research_problem.json).
 
-- an autonomous research systems scaffold
-- a structured multi-agent runtime on top of the OpenAI Agents SDK
-- a local memory and program-database system for research iteration
-- a framework for literature-grounded hypothesis generation and experimental follow-through
+4. Run the system:
 
-`PDEFlow` is not:
+```bash
+uv run python app.py --config configs/research_problem.json
+```
 
-- a general chat assistant
-- a static benchmark runner with hardcoded PDEBench assumptions
-- a pure optimizer sweep engine
-- a toy multi-agent conversation simulator
-- a no-op placeholder pipeline with mock assets
+Or:
 
-## System Goals
+```bash
+uv run pdeflow --config configs/research_problem.json
+```
 
-The repository is built for the following target behavior:
+To override the run name:
 
-1. The user describes a scientific research problem in config.
-2. The system decides which papers, repos, datasets, checkpoints, and docs it needs.
-3. The system acquires and inspects those assets itself.
-4. The system identifies bottlenecks and proposes method-level hypotheses.
-5. The system implements child program candidates in isolated workspaces.
-6. The system executes experiments, parses outcomes, and records lineage.
-7. The system reflects on results and decides whether to continue another cycle.
-8. The system writes durable reports from structured state.
+```bash
+uv run python app.py --config configs/research_problem.json --run-name pde_round1
+```
 
-## Design Principles
+## What The User Provides
 
-### 1. Manager-Centered Orchestration
+The intended user input is only:
 
-The manager controls the workflow. Specialist agents do not freely talk to each other. They operate against shared state and a tool surface.
+- a research question
+- execution constraints
+- optional API keys
 
-### 2. Explicit State Machines
+The system is designed to decide for itself:
 
-Research is represented as named phases. Each phase has a clear output contract and updates shared state.
-
-### 3. External State Over Hidden Memory
-
-Long-lived research state is stored in JSONL, JSON, and SQLite so that the system can be inspected, resumed, audited, and extended.
-
-### 4. Tool-Driven Research
-
-Agents must use tools to inspect reality:
-
-- search literature
-- clone repos
-- bootstrap environments
-- inspect file trees
-- run commands
-- parse metrics
-- write reports
-
-### 5. Program Evolution As A First-Class Object
-
-The system tracks parent programs, child programs, patches, experiments, and outcomes. This is the basis for future self-evolving code search.
-
-### 6. Distinguish Method Innovation From Tuning
-
-The workflow explicitly represents candidate directions, hypotheses, and method designs so the system can separate new methods from pure engineering sweeps.
+- which papers to search
+- which repositories to inspect
+- which datasets or checkpoints to acquire
+- how to bootstrap environments
+- which baseline to build on
+- which hypotheses to test
+- which experiments to run
+- when to continue or stop
 
 ## Workflow
 
-The workflow is implemented as a phase/state machine with these phases:
+The manager runs these phases:
 
 1. `literature_review`
 2. `acquisition`
@@ -111,392 +77,44 @@ The workflow is implemented as a phase/state machine with these phases:
 10. `reflection`
 11. `reporting`
 
-The first four phases build context and execution readiness. The next six phases form an iterative research cycle. The final phase writes research artifacts to disk.
-
-### Phase Semantics
-
-- `literature_review`: search for relevant papers, extract limitations, build taxonomy, and identify open questions
-- `acquisition`: inspect the machine, check secrets, discover and clone repos, download assets, and bootstrap environments
-- `problem_framing`: define the concrete research target, evaluation criteria, and candidate directions
-- `diagnosis`: identify the highest-value bottlenecks from literature, code structure, and existing experiment evidence
-- `hypothesis`: propose testable, method-level research hypotheses
-- `method_design`: convert a hypothesis into implementable architectural, loss, data, training, or inference changes
-- `coding`: create a child workspace, modify code, and run validation or smoke checks
-- `experiment_planning`: construct actual execution plans, commands, expected outputs, and stopping rules
-- `experiment`: run commands, capture logs, parse metrics, and record failures
-- `reflection`: assess whether the latest results justify continuation, branching, or termination
-- `reporting`: write literature notes, acquisition reports, idea diaries, experiment summaries, and final reports
-
-## Agent Roles
-
-The current system includes the following specialist agents:
-
-- `LiteratureAgent`
-- `AcquisitionAgent`
-- `ProblemFramingAgent`
-- `DiagnosisAgent`
-- `HypothesisAgent`
-- `MethodDesignAgent`
-- `CoderAgent`
-- `ExperimentPlannerAgent`
-- `ExperimentAgent`
-- `ReflectionAgent`
-- `ReporterAgent`
-
-These agents are orchestrated by the manager in [orchestration.py](/root/PDEFlow/src/pdeflow/orchestration.py).
-
-## Runtime Model
-
-The runtime layer is implemented in [runtime.py](/root/PDEFlow/src/pdeflow/runtime.py) and uses the OpenAI Agents SDK as the primary agent runtime.
-
-Important runtime properties:
-
-- structured outputs via typed Pydantic models
-- persistent agent sessions backed by SQLite
-- tool-enabled specialist execution
-- fail-fast behavior if `OPENAI_API_KEY` is not set
-
-There is no mock runtime in the current repository state. The system is intended to run live.
-
-## State And Memory Model
-
-Structured schemas live in [schemas.py](/root/PDEFlow/src/pdeflow/schemas.py). They include:
-
-- research brief
-- current phase
-- environment snapshot
-- secret status
-- literature notes and taxonomy
-- artifact registry
-- repository registry
-- candidate directions
-- hypotheses
-- method designs
-- program candidates
-- experiment plans
-- experiment records
-- best-known results
-- failure summaries
-- reflections
-- generated reports
-
-The memory layer in [memory.py](/root/PDEFlow/src/pdeflow/memory.py) stores:
-
-- episodic memory as JSONL
-- semantic memory as JSONL
-- literature notes as JSONL
-- artifact and repository registries as JSONL
-- idea memory as JSONL
-- experiment plans and records as JSONL
-- generated reports as JSONL
-- program lineage as SQLite
-
-This design makes the workflow inspectable and supports later research-on-research analysis.
-
-## Tool Surface
-
-The tool layer in [tools.py](/root/PDEFlow/src/pdeflow/tools.py) provides real executable capabilities.
-
-Current tool categories:
-
-- environment inspection
-- secret inspection
-- arXiv paper search
-- GitHub repository search
-- URL fetching
-- file download
-- PDF text extraction
-- repository cloning
-- directory tree inspection
-- local file reading
-- codebase search
-- file discovery
-- project manifest detection
-- Python environment bootstrapping with `uv`
-- tree copying for child workspaces
-- file writing
-- patch writing and patch application
-- shell command execution
-- JSON and metric parsing
-- report writing
-
-These tools are exposed to agents through OpenAI Agents SDK function tools. The intent is that agents decide when and how to use them, rather than having asset locations hardcoded in Python logic.
-
-## Program Evolution Model
-
-The system treats code evolution as a tracked research object:
-
-- a baseline or acquired repository becomes a parent program
-- a hypothesis motivates a method design
-- the coding phase creates a child workspace and changed files
-- the experiment phase evaluates the child program
-- the lineage database records the relationship between parent and child
-
-This is the basis for future self-evolving research loops similar in spirit to program-search systems, but grounded here in literature retrieval and scientific experimentation.
-
-## Repository Structure
-
-Top-level structure:
-
-```text
-.
-├── app.py
-├── configs/
-├── pyproject.toml
-├── src/pdeflow/
-├── external_assets/
-└── runs/
-```
-
-Important source files:
-
-- [config.py](/root/PDEFlow/src/pdeflow/config.py): top-level config schema
-- [schemas.py](/root/PDEFlow/src/pdeflow/schemas.py): state and phase output schemas
-- [tools.py](/root/PDEFlow/src/pdeflow/tools.py): tool implementations
-- [agents.py](/root/PDEFlow/src/pdeflow/agents.py): specialist agent definitions
-- [orchestration.py](/root/PDEFlow/src/pdeflow/orchestration.py): manager loop
-- [memory.py](/root/PDEFlow/src/pdeflow/memory.py): local memory stores
-- [runtime.py](/root/PDEFlow/src/pdeflow/runtime.py): OpenAI Agents SDK adapter
-- [app.py](/root/PDEFlow/src/pdeflow/app.py): CLI entrypoint
-
-## Installation
-
-This project is managed with `uv`.
-
-### Requirements
-
-- Python 3.10+
-- `uv`
-- network access if you want autonomous retrieval and downloads
-- `OPENAI_API_KEY`
-
-### Install Dependencies
-
-```bash
-uv sync
-```
-
-The repository includes [pyproject.toml](/root/PDEFlow/pyproject.toml) and `uv.lock`.
-
-## Environment Variables
-
-Create `.env` from [.env.example](/root/PDEFlow/.env.example):
-
-```bash
-cp .env.example .env
-```
-
-Supported variables:
-
-- `OPENAI_API_KEY`: required for the agent runtime
-- `GITHUB_TOKEN`: optional; improves GitHub API rate limits
-
-The current arXiv retrieval path uses the public arXiv API and does not require a key.
-
-## Configuration
-
-The research problem is defined in [research_problem.json](/root/PDEFlow/configs/research_problem.json).
-
-The config has five main parts:
-
-- `research_brief`: the scientific question, background, objectives, constraints, and deliverables
-- `runtime`: the agent backend and model
-- `retrieval`: retrieval policy and search limits
-- `execution`: network, shell, package installation, and workspace policy
-- `resource_policy`: preferred GPU selection and runtime policy
-
-### Minimal Mental Model
-
-The user should think of config as:
-
-1. the research question
-2. the execution policy
-3. the machine policy
-
-The user should not need to manually enumerate the benchmark repo, dataset URL, or checkpoint URL unless they want to constrain the search space.
-
-## Running The System
-
-Default run:
-
-```bash
-uv run python app.py --config configs/research_problem.json
-```
-
-Package entrypoint:
-
-```bash
-uv run pdeflow --config configs/research_problem.json
-```
-
-Override run name:
-
-```bash
-uv run python app.py --config configs/research_problem.json --run-name pde_round1
-```
-
-If `OPENAI_API_KEY` is missing, the process stops immediately with a clear runtime error. This is intentional.
-
-## What The User Supplies
-
-The intended user input is:
-
-- a scientific research problem
-- execution constraints and safety policy
-- optionally some environment variables or API keys
-
-That is all.
-
-The system is designed so the agent decides:
-
-- what to search
-- what to download
-- what to inspect
-- what code to modify
-- what experiments to run
-- when to continue or stop
+The design is manager-centered. Specialist agents do not freely chat with each other; they operate through shared state and tools.
 
 ## Outputs
 
-Run-specific outputs are written under `runs/<run_name>/`.
+Run artifacts are written to `runs/<run_name>/`:
 
-Directory layout:
-
-- `state/`: full structured states saved after phases
+- `state/`: structured state snapshots
 - `logs/`: command logs and tool events
-- `memory/`: episodic, semantic, and idea memories
+- `memory/`: episodic, semantic, and idea memory
 - `literature/`: paper notes
-- `programs/`: lineage database and program metadata
+- `programs/`: program lineage database
 - `experiments/`: experiment records and logs
-- `reports/`: markdown reports
-- `workspaces/`: child program workspaces created during coding
+- `reports/`: generated markdown reports
+- `workspaces/`: child program workspaces
 
-Shared downloaded or cloned assets are stored under:
+Shared external assets are stored in `external_assets/`.
 
-- `external_assets/`
+## Key Files
 
-## Generated Reports
+- [config.py](/root/PDEFlow/src/pdeflow/config.py): config schema
+- [schemas.py](/root/PDEFlow/src/pdeflow/schemas.py): state and memory schema
+- [tools.py](/root/PDEFlow/src/pdeflow/tools.py): executable tool surface
+- [agents.py](/root/PDEFlow/src/pdeflow/agents.py): specialist agents
+- [orchestration.py](/root/PDEFlow/src/pdeflow/orchestration.py): manager loop
+- [memory.py](/root/PDEFlow/src/pdeflow/memory.py): JSONL and SQLite memory
+- [runtime.py](/root/PDEFlow/src/pdeflow/runtime.py): OpenAI Agents SDK runtime adapter
 
-The reporting phase is expected to write durable markdown artifacts such as:
+## Notes
 
-- literature review notes
-- acquisition report
-- idea diary
-- experiment summary
-- final research report
+- `OPENAI_API_KEY` is required.
+- The current repository is live-only. There is no mock runtime.
+- The system uses real shell commands, downloads, repo cloning, and environment setup, so it should be run on a controlled research machine.
 
-These are generated from structured state rather than free-form chat transcripts.
+## Paper Draft
 
-## Autonomous Acquisition
+A paper-style system description is provided in:
 
-Acquisition is part of the research loop, not a manual prerequisite.
+- [pdeflow_system.tex](/root/PDEFlow/docs/pdeflow_system.tex)
+- [references.bib](/root/PDEFlow/docs/references.bib)
 
-The acquisition phase can:
-
-- inspect the machine and current Python environment
-- search literature endpoints
-- search repository registries
-- fetch benchmark or documentation pages
-- clone code repositories
-- inspect project manifests and likely training entrypoints
-- bootstrap environments using `uv`
-- record acquired assets into structured memory
-
-This is how the system is intended to discover PDEBench-related assets or any future research assets. They should not need to be manually hardcoded into the framework.
-
-## Coding And Experiment Execution
-
-The coding phase operates on real workspaces. It is intended to:
-
-- inspect baseline code
-- copy a parent workspace
-- write or patch files
-- run compile or smoke-test commands
-
-The experiment-planning phase then defines:
-
-- setup commands
-- launch commands
-- working directories
-- GPU selection
-- expected outputs
-- success criteria
-- stopping rules
-
-The experiment phase executes commands, captures logs, and parses metrics from generated files or text logs.
-
-## PDE Focus
-
-This repository is currently configured for PDE neural operator research, but the architecture is broader than PDEBench-specific optimization.
-
-The included research brief emphasizes:
-
-- neural operator methods
-- short-window PDE prediction
-- physics-aware training or inference
-- autonomous discovery of literature, repos, data, and checkpoints
-- iterative scientific improvement rather than blind tuning
-
-## Current Strengths
-
-- explicit research workflow instead of prompt spaghetti
-- real tool surface instead of placeholder reasoning
-- manager-centered orchestration
-- durable external memory
-- program lineage tracking
-- live runtime with OpenAI Agents SDK
-- direct support for autonomous acquisition and environment setup
-
-## Current Limitations
-
-This repository is a real autonomous systems scaffold, but it still has important limits:
-
-- research quality depends on the underlying model and tool decisions
-- metric parsing is generic and not yet specialized for every scientific benchmark format
-- domain-specific experiment interpretation is still stronger for some research areas than others
-- unrestricted autonomous shell execution is powerful and should be used carefully
-- the framework can discover and run external code, but correctness of third-party repos is not guaranteed
-
-These are system-level limitations, not placeholders.
-
-## Safety And Operational Notes
-
-The framework is capable of:
-
-- running shell commands
-- cloning remote repositories
-- downloading external files
-- bootstrapping Python environments
-
-This is necessary for autonomous research, but it also means runs should be performed in a controlled machine environment with clear permissions and resource expectations.
-
-Recommended practice:
-
-- run on a dedicated research machine or sandbox
-- keep API keys scoped and minimal
-- monitor first live runs
-- review generated reports and child workspaces before long experiment campaigns
-
-## Extending The System
-
-High-value next extensions for PDE operator research include:
-
-- richer result parsers for PDE rollout metrics
-- dataset introspection for HDF5, NetCDF, and scientific metadata
-- checkpoint compatibility validation
-- physics residual libraries for common PDE families
-- stronger benchmark family discovery across FNO, DeepONet, PINO, and related methods
-- automated ablation planning
-- paper-ready report generation and competition submission formatting
-
-## Release Status
-
-Current repository status:
-
-- live runtime
-- no mock mode
-- `uv`-managed environment
-- structured multi-agent workflow
-- autonomous acquisition and execution interfaces
-
-To perform a full live run, the remaining operational prerequisite is simply to provide `OPENAI_API_KEY` in the environment.
+If a LaTeX toolchain is installed locally, compile from `docs/` with `pdflatex`, `bibtex`, and `pdflatex` twice.

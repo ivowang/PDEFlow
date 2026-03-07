@@ -1,0 +1,298 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue
+}
+
+\title{PDEFlow: A Manager-Centered Autonomous Research Agent System\\for PDE Neural Operator Research}
+\author{Anonymous Authors}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present \textbf{PDEFlow}, a manager-centered autonomous scientific research system designed for PDE neural operator research. The system takes a high-level research brief as input and then autonomously performs literature retrieval, external artifact acquisition, environment setup, baseline discovery, hypothesis generation, method design, code modification, experiment execution, reflection, and report generation. Unlike benchmark-specific tuning pipelines or multi-agent chat systems, PDEFlow is organized around an explicit research state machine, executable tool use, structured external memory, and a program-lineage database that records parent-child relationships between baseline and candidate implementations. The design targets open-ended scientific ML settings in which the system must decide what information, code, data, and compute resources are needed before proposing and testing new methods. Although the initial landing problem is PDE neural operator research grounded in benchmarks such as PDEBench \cite{takamoto2022pdebench} and method families such as FNO \cite{li2020fno} and DeepONet \cite{lu2021deeponet}, the architecture is general enough to support broader self-evolving scientific agent workflows.
+\end{abstract}
+
+\section{Introduction}
+Autonomous research systems for scientific machine learning must do more than generate text or optimize hyperparameters around a fixed baseline. In realistic workflows, a system must first decide what literature to read, which repositories to inspect, how to bootstrap code environments, what experiments are worth running, and which failures are informative. This is especially important in PDE operator learning, where benchmark code, datasets, checkpoints, training scripts, and evaluation logic are distributed across multiple external artifacts, and where progress often depends on a combination of literature-grounded reasoning and executable systems work.
+
+PDEFlow is built for this setting. The central premise is that the user should provide a research problem, not a fully curated experimental workspace. The system must therefore autonomously:
+\begin{enumerate}[leftmargin=1.5em]
+  \item search and organize relevant literature,
+  \item discover repositories, datasets, checkpoints, and technical documentation,
+  \item bootstrap environments and inspect candidate baselines,
+  \item identify bottlenecks and formulate research hypotheses,
+  \item implement candidate methods in child workspaces,
+  \item run experiments and interpret outcomes, and
+  \item maintain a durable memory of ideas, programs, and failures.
+\end{enumerate}
+
+The design is motivated by PDE neural operator research, where foundational operator-learning methods such as Fourier Neural Operator (FNO) \cite{li2020fno}, DeepONet \cite{lu2021deeponet}, and benchmark suites such as PDEBench \cite{takamoto2022pdebench} provide a starting point but do not solve the research workflow problem. In particular, they do not address how an autonomous system should move from a task description to a self-directed cycle of acquisition, design, implementation, evaluation, and reflection.
+
+\paragraph{Contributions.}
+PDEFlow makes four core contributions:
+\begin{enumerate}[leftmargin=1.5em]
+  \item an explicit manager-centered research state machine rather than an unconstrained multi-agent chat loop;
+  \item a tool-driven acquisition and execution layer that allows agents to search papers, clone repositories, bootstrap environments, run commands, and parse outputs;
+  \item a structured external state and memory hierarchy for literature, ideas, experiments, and program lineage; and
+  \item a program-evolution abstraction that links hypotheses to method designs, code changes, evaluated child programs, and subsequent reflections.
+\end{enumerate}
+
+\section{Problem Setting}
+We consider the setting in which the user supplies a \emph{research brief} that describes:
+\begin{itemize}[leftmargin=1.5em]
+  \item the scientific question,
+  \item relevant background,
+  \item target objectives,
+  \item domain constraints, and
+  \item desired deliverables.
+\end{itemize}
+
+For the current repository, the landing domain is PDE neural operator research under AI4Science-style competition constraints. A typical brief may specify goals such as improving short-window PDE prediction while requiring explicit physical information in training or inference. The system is not told in advance which repository to use, which checkpoint to load, or which paper to prioritize. Those decisions must be made during execution.
+
+\section{Design Principles}
+\subsection{Manager-Centered Orchestration}
+PDEFlow uses a manager-centered architecture in which specialist agents are invoked phase by phase, and each phase writes to shared structured state. This pattern is deliberately aligned with Python-first agent orchestration ideas supported by the OpenAI Agents SDK \cite{openai_agents_sdk}. The design avoids free-form agent-to-agent chatter, which is difficult to inspect, hard to control, and often poor at maintaining durable research memory.
+
+\subsection{External State Over Hidden Agent Memory}
+All long-lived information is represented in explicit schemas. This includes literature notes, repositories, artifacts, hypotheses, designs, programs, experiment plans, experiment records, reflections, and generated reports. External state is easier to debug, audit, resume, compare across runs, and use for research-on-research analysis.
+
+\subsection{Executable Tools Over Pretend Reasoning}
+The system is designed around real tool use. Agents do not merely claim that a repository exists or that a benchmark can be run. They are expected to search, download, inspect, bootstrap, execute, and parse.
+
+\subsection{Program Evolution As A First-Class Object}
+Scientific progress often comes from branching an existing program into candidate variants, evaluating them, and learning from failures. PDEFlow therefore treats parent-child program relationships, patches, and experiment outcomes as first-class state rather than incidental logs.
+
+\section{System Overview}
+At the highest level, PDEFlow consists of five components:
+\begin{enumerate}[leftmargin=1.5em]
+  \item a runtime adapter for structured agent execution,
+  \item a manager that controls workflow phases,
+  \item a set of specialist agents,
+  \item a tool layer for retrieval, acquisition, code manipulation, and execution, and
+  \item a local memory layer backed by JSONL and SQLite.
+\end{enumerate}
+
+\subsection{Runtime Layer}
+The runtime is built on the OpenAI Agents SDK \cite{openai_agents_sdk}. Each specialist agent is instantiated with:
+\begin{itemize}[leftmargin=1.5em]
+  \item a role-specific instruction block,
+  \item a typed output schema,
+  \item a shared tool surface, and
+  \item a persistent session identifier.
+\end{itemize}
+
+Structured outputs are implemented with Pydantic models, which keeps phase outputs machine-readable and easy to merge into shared state.
+
+\subsection{Manager}
+The manager is responsible for:
+\begin{itemize}[leftmargin=1.5em]
+  \item initializing the run state,
+  \item executing the front-end phases that establish context and execution readiness,
+  \item iterating over hypothesis, design, coding, planning, experiment, and reflection phases,
+  \item deciding when to stop based on reflection state, and
+  \item launching the reporting phase at the end of the run.
+\end{itemize}
+
+\subsection{Specialist Agents}
+The current implementation includes:
+\begin{itemize}[leftmargin=1.5em]
+  \item LiteratureAgent,
+  \item AcquisitionAgent,
+  \item ProblemFramingAgent,
+  \item DiagnosisAgent,
+  \item HypothesisAgent,
+  \item MethodDesignAgent,
+  \item CoderAgent,
+  \item ExperimentPlannerAgent,
+  \item ExperimentAgent,
+  \item ReflectionAgent, and
+  \item ReporterAgent.
+\end{itemize}
+
+Each agent is specialized by output contract rather than by autonomous social behavior.
+
+\section{Phase-Structured Research Loop}
+The workflow is represented as an explicit state machine:
+\begin{enumerate}[leftmargin=1.5em]
+  \item \texttt{literature\_review}
+  \item \texttt{acquisition}
+  \item \texttt{problem\_framing}
+  \item \texttt{diagnosis}
+  \item \texttt{hypothesis}
+  \item \texttt{method\_design}
+  \item \texttt{coding}
+  \item \texttt{experiment\_planning}
+  \item \texttt{experiment}
+  \item \texttt{reflection}
+  \item \texttt{reporting}
+\end{enumerate}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{p{0.19\linewidth}p{0.72\linewidth}}
+\toprule
+\textbf{Phase} & \textbf{Primary Responsibility} \\
+\midrule
+\texttt{literature\_review} & Search papers, collect notes, extract limitations, and build method taxonomy. \\
+\texttt{acquisition} & Inspect the machine, search repos, download assets, clone code, and bootstrap environments. \\
+\texttt{problem\_framing} & Define the concrete research target, evaluation criteria, and candidate directions. \\
+\texttt{diagnosis} & Identify bottlenecks using literature, repository structure, and prior experiment evidence. \\
+\texttt{hypothesis} & Generate testable, method-level hypotheses. \\
+\texttt{method\_design} & Translate hypotheses into architectural, loss, data, training, or inference changes. \\
+\texttt{coding} & Create child workspaces, write files, patch code, and run validation checks. \\
+\texttt{experiment\_planning} & Construct concrete commands, working directories, stopping rules, and expected outputs. \\
+\texttt{experiment} & Execute plans, collect logs, parse metrics, and record failures. \\
+\texttt{reflection} & Assess evidence, update lessons, and decide whether another cycle is warranted. \\
+\texttt{reporting} & Generate durable markdown reports from structured state. \\
+\bottomrule
+\end{tabular}
+\caption{Phase-structured research loop in PDEFlow.}
+\label{tab:phases}
+\end{table}
+
+The first four phases establish context and execution readiness. The next six phases form the iterative research loop. The final phase writes output artifacts.
+
+\section{State And Memory}
+\subsection{Structured State}
+The global research state stores:
+\begin{itemize}[leftmargin=1.5em]
+  \item the research brief,
+  \item the current phase and phase history,
+  \item environment and secret status,
+  \item literature notes, taxonomy entries, and open questions,
+  \item artifact and repository registries,
+  \item problem framing notes and candidate directions,
+  \item hypotheses and method designs,
+  \item program candidates and experiment plans,
+  \item experiment records and best-known results,
+  \item failure summaries and reflections, and
+  \item generated reports and next actions.
+\end{itemize}
+
+\subsection{Memory Hierarchy}
+The memory layer stores:
+\begin{itemize}[leftmargin=1.5em]
+  \item episodic memory for phase-level summaries,
+  \item semantic memory for stable lessons and research insights,
+  \item literature notes,
+  \item artifact and repository registries,
+  \item idea memory,
+  \item experiment plans and records, and
+  \item generated reports.
+\end{itemize}
+
+Program lineage is stored in SQLite so that parent-child relationships, evaluated candidates, and outcomes can be queried independently of the current run state.
+
+\section{Tool Layer}
+The tool surface is a core part of the system. The current implementation supports:
+\begin{itemize}[leftmargin=1.5em]
+  \item machine and secret inspection,
+  \item arXiv paper search,
+  \item GitHub repository search,
+  \item remote text fetching,
+  \item arbitrary file download,
+  \item PDF text extraction,
+  \item repository cloning,
+  \item directory-tree inspection,
+  \item file reading and search,
+  \item project manifest detection,
+  \item environment bootstrapping with \texttt{uv},
+  \item child-workspace creation,
+  \item file writing and patch application,
+  \item shell command execution,
+  \item JSON and metric parsing, and
+  \item report writing.
+\end{itemize}
+
+This is what allows the system to move from a natural-language problem statement to executable scientific work.
+
+\section{Program Evolution}
+PDEFlow represents the transition from idea to evaluated implementation with a program-evolution chain:
+\begin{enumerate}[leftmargin=1.5em]
+  \item acquire or discover a baseline program,
+  \item identify a bottleneck,
+  \item propose a hypothesis,
+  \item design a method corresponding to that hypothesis,
+  \item create a child program variant,
+  \item run experiments on that child, and
+  \item record outcomes and lessons for future cycles.
+\end{enumerate}
+
+This abstraction is important because many scientific-agent systems fail to preserve the link between motivation, implementation, and result. PDEFlow explicitly preserves that chain.
+
+\section{PDE Research As A Landing Domain}
+The initial landing domain is PDE neural operator research. This is a useful stress test because it requires the system to reason across:
+\begin{itemize}[leftmargin=1.5em]
+  \item scientific literature,
+  \item benchmark repositories,
+  \item dataset formats,
+  \item checkpoint availability,
+  \item training and evaluation code,
+  \item physical constraints, and
+  \item iterative experimental methodology.
+\end{itemize}
+
+Methods such as FNO \cite{li2020fno} and DeepONet \cite{lu2021deeponet}, together with benchmark suites such as PDEBench \cite{takamoto2022pdebench}, provide an excellent substrate for autonomous research because they expose both established baselines and open opportunities for method-level improvement.
+
+\section{Implementation Status}
+The current repository provides a live, executable autonomous research scaffold with:
+\begin{itemize}[leftmargin=1.5em]
+  \item an OpenAI Agents SDK runtime,
+  \item typed structured outputs,
+  \item a manager-centered orchestration loop,
+  \item autonomous acquisition and environment-setup tools,
+  \item a local memory and lineage store, and
+  \item markdown reporting from structured state.
+\end{itemize}
+
+The main operational prerequisite for full live execution is that the environment provide a valid \texttt{OPENAI\_API\_KEY}. Optional variables such as \texttt{GITHUB\_TOKEN} can improve repository-search throughput.
+
+\section{Limitations}
+PDEFlow is a real autonomous systems scaffold, but several limitations remain:
+\begin{itemize}[leftmargin=1.5em]
+  \item experiment quality depends on the underlying model and tool-use quality,
+  \item metric parsing is currently generic rather than benchmark-specific,
+  \item unrestricted acquisition and shell execution require a controlled operating environment,
+  \item third-party repositories can be inconsistent or incomplete, and
+  \item domain-specific scientific judgment is still partly limited by the generality of the base model.
+\end{itemize}
+
+These are not placeholders but realistic system-level constraints for autonomous scientific agents.
+
+\section{Future Work}
+The system is designed to support several natural extensions:
+\begin{itemize}[leftmargin=1.5em]
+  \item domain-specific dataset introspection for HDF5 and NetCDF scientific benchmarks,
+  \item richer PDE metric parsers and rollout diagnostics,
+  \item checkpoint compatibility analysis,
+  \item physics residual libraries for common PDE families,
+  \item stronger automated ablation planning,
+  \item multi-branch program search over child candidates, and
+  \item paper-ready report generation for scientific publication pipelines.
+\end{itemize}
+
+\section{Conclusion}
+PDEFlow is an autonomous research system built for settings in which the user should only specify the scientific problem while the system determines what information, code, data, and experiments are required to make progress. By combining manager-centered orchestration, explicit state machines, structured memory, executable tool use, and program lineage tracking, PDEFlow provides a concrete systems foundation for self-evolving scientific agents in PDE neural operator research and beyond.
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}
