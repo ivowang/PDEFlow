@@ -45,6 +45,8 @@ class ResearchTools:
             )
         self.shared_workspace_root = ensure_dir(resolved_shared_root)
         self.run_workspace_root = ensure_dir(memory.root / "workspaces")
+        self.managed_env_root = ensure_dir(memory.root / "envs")
+        self.managed_python_root = ensure_dir(memory.root / "pythons")
 
     def _progress_message_for_tool_event(self, tool_name: str, payload: dict[str, Any]) -> str | None:
         if tool_name == "inspect_secret_status":
@@ -75,6 +77,25 @@ class ResearchTools:
             return f"Detected project manifests in {payload.get('path', '')}. count={len(payload.get('manifests', []))}."
         if tool_name == "bootstrap_python_environment":
             return f"Environment bootstrap finished for {payload.get('project_path', '')} with status={payload.get('status', 'unknown')}."
+        if tool_name == "ensure_python_environment":
+            return (
+                "Managed environment ready for "
+                f"{payload.get('project_path', '')}: status={payload.get('status', 'unknown')} "
+                f"path={payload.get('environment_path', '')}."
+            )
+        if tool_name == "inspect_python_environment":
+            return (
+                "Inspected managed environment "
+                f"{payload.get('environment_path', '')}: "
+                f"python_ok={payload.get('python_available', False)} pip_ok={payload.get('pip_available', False)}."
+            )
+        if tool_name == "run_in_environment":
+            command = str(payload.get("command", "")).strip()
+            compact = command if len(command) <= 140 else command[:137] + "..."
+            return (
+                f"Environment command completed with returncode={payload.get('returncode', 'unknown')}: "
+                f"{compact}"
+            )
         if tool_name == "copy_tree":
             return f"Created child workspace at {payload.get('destination', '')}."
         if tool_name == "write_patch_file":
@@ -125,6 +146,108 @@ class ResearchTools:
         if not allowed:
             raise ValueError(f"Path is outside managed roots: {resolved}")
         return resolved
+
+    def _find_project_root(self, path: Path) -> Path:
+        candidate = path if path.is_dir() else path.parent
+        manifest_names = (
+            "pyproject.toml",
+            "uv.lock",
+            "requirements.txt",
+            "setup.py",
+            "environment.yml",
+            "environment.yaml",
+        )
+        while True:
+            if any((candidate / name).exists() for name in manifest_names):
+                return candidate
+            if candidate == candidate.parent:
+                return path if path.is_dir() else path.parent
+            candidate = candidate.parent
+
+    def _environment_python(self, environment_path: Path) -> Path:
+        return environment_path / "bin" / "python"
+
+    def _environment_bin(self, environment_path: Path) -> Path:
+        return environment_path / "bin"
+
+    def _extract_requires_python(self, project_root: Path) -> str | None:
+        pyproject = project_root / "pyproject.toml"
+        if not pyproject.exists():
+            return None
+        text = pyproject.read_text(encoding="utf-8")
+        match = re.search(r'requires-python\s*=\s*"([^"]+)"', text)
+        return match.group(1).strip() if match else None
+
+    def _extract_pyproject_dependencies(self, project_root: Path) -> list[str]:
+        pyproject = project_root / "pyproject.toml"
+        if not pyproject.exists():
+            return []
+        text = pyproject.read_text(encoding="utf-8")
+        marker = "dependencies = ["
+        start = text.find(marker)
+        if start == -1:
+            return []
+        index = start + len(marker)
+        depth = 1
+        while index < len(text) and depth > 0:
+            char = text[index]
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+            index += 1
+        block = text[start + len(marker) : index - 1]
+        return [item.strip() for item in re.findall(r'"([^"]+)"', block)]
+
+    def _preferred_python_spec(self, project_root: Path, python_spec: str | None = None) -> str | None:
+        if python_spec:
+            return python_spec
+        requires_python = self._extract_requires_python(project_root)
+        if not requires_python:
+            return None
+        if "<3.10" in requires_python:
+            return "3.9"
+        if "<3.11" in requires_python:
+            return "3.10"
+        if "<3.12" in requires_python:
+            return "3.11"
+        match = re.search(r">=\s*([0-9]+\.[0-9]+)", requires_python)
+        return match.group(1) if match else None
+
+    def _find_python_interpreter(self, project_root: Path, python_spec: str | None = None) -> str:
+        preferred_spec = self._preferred_python_spec(project_root, python_spec)
+        if preferred_spec:
+            find_result = self.run_command(
+                f"uv python find {shlex.quote(preferred_spec)}",
+                cwd=self.repo_root,
+                allow_failure=True,
+                emit_progress=False,
+            )
+            if find_result["returncode"] == 0 and find_result["stdout_tail"].strip():
+                return find_result["stdout_tail"].strip().splitlines()[-1].strip()
+            if self.config.execution.allow_package_installation and self.config.execution.network_enabled:
+                install_result = self.run_command(
+                    (
+                        "uv python install "
+                        f"--install-dir {shlex.quote(str(self.managed_python_root))} "
+                        f"{shlex.quote(preferred_spec)}"
+                    ),
+                    cwd=self.repo_root,
+                    allow_failure=True,
+                )
+                if install_result["returncode"] == 0:
+                    find_result = self.run_command(
+                        f"uv python find {shlex.quote(preferred_spec)}",
+                        cwd=self.repo_root,
+                        allow_failure=True,
+                        emit_progress=False,
+                    )
+                    if find_result["returncode"] == 0 and find_result["stdout_tail"].strip():
+                        return find_result["stdout_tail"].strip().splitlines()[-1].strip()
+        for candidate in ("/usr/bin/python3", shutil.which("python3"), sys.executable):
+            if candidate and Path(candidate).exists():
+                return str(Path(candidate).resolve())
+        raise RuntimeError("No usable Python interpreter was found for managed environment creation.")
 
     def inspect_secret_status(self) -> list[SecretStatus]:
         statuses = [
@@ -434,44 +557,168 @@ class ResearchTools:
         self._record_tool_event("detect_project_manifests", result)
         return result
 
-    def bootstrap_python_environment(self, project_path: str) -> dict[str, Any]:
+    def ensure_python_environment(
+        self,
+        project_path: str,
+        environment_name: str | None = None,
+        python_spec: str | None = None,
+        dependency_strategy: str = "auto",
+        editable_install: bool = True,
+    ) -> dict[str, Any]:
         if not self.config.execution.auto_bootstrap_environments:
             raise RuntimeError("Automatic environment bootstrapping is disabled in the current config.")
         if not self.config.execution.allow_package_installation:
             raise RuntimeError("Package installation is disabled in the current config.")
-        project_root = self._resolve_path(project_path)
+
+        initial_root = self._resolve_path(project_path)
+        project_root = self._find_project_root(initial_root)
+        environment_slug = environment_name or f"{slugify(project_root.name)}-{short_hash(str(project_root))}"
+        environment_path = self.managed_env_root / environment_slug
+        python_interpreter = self._find_python_interpreter(project_root, python_spec)
         manifest_info = self.detect_project_manifests(str(project_root))
         manifests = set(manifest_info["manifests"])
-        commands: list[str] = []
-        if "pyproject.toml" in manifests:
-            commands.append("uv sync")
-        elif "requirements.txt" in manifests:
-            commands.extend(["uv venv", "uv pip install -r requirements.txt"])
-        elif "setup.py" in manifests:
-            commands.extend(["uv venv", "uv pip install -e ."])
-        else:
-            return {
+        results: list[dict[str, Any]] = []
+        attempted_commands: list[str] = []
+
+        create_command = (
+            "uv venv --seed --allow-existing "
+            f"--python {shlex.quote(python_interpreter)} {shlex.quote(str(environment_path))}"
+        )
+        attempted_commands.append(create_command)
+        create_result = self.run_command(create_command, cwd=self.repo_root, allow_failure=True)
+        results.append(create_result)
+        if create_result["returncode"] != 0:
+            payload = {
                 "project_path": str(project_root),
-                "status": "unsupported",
+                "requested_path": str(initial_root),
+                "environment_name": environment_slug,
+                "environment_path": str(environment_path),
+                "python_interpreter": python_interpreter,
+                "status": "failed",
                 "manifests": sorted(manifests),
-                "commands": [],
-                "results": [],
+                "strategy": dependency_strategy,
+                "attempted_commands": attempted_commands,
+                "results": results,
             }
-        results = []
-        overall_status = "ready"
-        for command in commands:
-            result = self.run_command(command, cwd=project_root, allow_failure=True)
-            results.append(result)
-            if result["returncode"] != 0:
-                overall_status = "failed"
-                break
+            self._record_tool_event("ensure_python_environment", payload)
+            return payload
+
+        environment_python = self._environment_python(environment_path)
+        strategy_used = "empty"
+        if "pyproject.toml" in manifests:
+            sync_command = f"env VIRTUAL_ENV={shlex.quote(str(environment_path))} uv sync --project {shlex.quote(str(project_root))} --active --no-dev"
+            attempted_commands.append(sync_command)
+            sync_result = self.run_command(sync_command, cwd=project_root, allow_failure=True)
+            results.append(sync_result)
+            if sync_result["returncode"] == 0:
+                strategy_used = "uv_sync"
+            elif dependency_strategy in {"auto", "minimal"}:
+                dependencies = self._extract_pyproject_dependencies(project_root)
+                if dependencies:
+                    install_command = (
+                        f"uv pip install --python {shlex.quote(str(environment_python))} "
+                        + " ".join(shlex.quote(item) for item in dependencies)
+                    )
+                    attempted_commands.append(install_command)
+                    install_result = self.run_command(install_command, cwd=project_root, allow_failure=True)
+                    results.append(install_result)
+                    if install_result["returncode"] == 0 and editable_install:
+                        editable_command = (
+                            f"uv pip install --python {shlex.quote(str(environment_python))} "
+                            f"--editable {shlex.quote(str(project_root))} --no-deps"
+                        )
+                        attempted_commands.append(editable_command)
+                        editable_result = self.run_command(editable_command, cwd=project_root, allow_failure=True)
+                        results.append(editable_result)
+                        if editable_result["returncode"] == 0:
+                            strategy_used = "uv_pip_minimal_editable"
+                    elif install_result["returncode"] == 0:
+                        strategy_used = "uv_pip_minimal"
+        elif "requirements.txt" in manifests:
+            install_command = (
+                f"uv pip install --python {shlex.quote(str(environment_python))} "
+                f"--requirements {shlex.quote(str(project_root / 'requirements.txt'))}"
+            )
+            attempted_commands.append(install_command)
+            install_result = self.run_command(install_command, cwd=project_root, allow_failure=True)
+            results.append(install_result)
+            if install_result["returncode"] == 0:
+                strategy_used = "requirements"
+        elif "setup.py" in manifests:
+            install_command = (
+                f"uv pip install --python {shlex.quote(str(environment_python))} "
+                f"--editable {shlex.quote(str(project_root))}"
+            )
+            attempted_commands.append(install_command)
+            install_result = self.run_command(install_command, cwd=project_root, allow_failure=True)
+            results.append(install_result)
+            if install_result["returncode"] == 0:
+                strategy_used = "editable_setup"
+
+        verify_command = f"{shlex.quote(str(environment_python))} -c \"import sys; print(sys.executable); print(sys.version.split()[0])\""
+        attempted_commands.append(verify_command)
+        verify_result = self.run_command(verify_command, cwd=project_root, allow_failure=True, emit_progress=False)
+        results.append(verify_result)
+        pip_command = f"{shlex.quote(str(environment_python))} -m pip --version"
+        attempted_commands.append(pip_command)
+        pip_result = self.run_command(pip_command, cwd=project_root, allow_failure=True, emit_progress=False)
+        results.append(pip_result)
+
+        success = verify_result["returncode"] == 0 and strategy_used != "empty"
         payload = {
             "project_path": str(project_root),
-            "status": overall_status,
+            "requested_path": str(initial_root),
+            "environment_name": environment_slug,
+            "environment_path": str(environment_path),
+            "python_interpreter": python_interpreter,
+            "environment_python": str(environment_python),
+            "status": "ready" if success else "failed",
             "manifests": sorted(manifests),
-            "commands": commands,
+            "strategy": strategy_used,
+            "attempted_commands": attempted_commands,
             "results": results,
         }
+        self._record_tool_event("ensure_python_environment", payload)
+        return payload
+
+    def inspect_python_environment(self, environment_path: str, modules: list[str] | None = None) -> dict[str, Any]:
+        resolved_env = self._resolve_path(environment_path, default_root=self.managed_env_root)
+        environment_python = self._environment_python(resolved_env)
+        python_result = self.run_command(
+            f"{shlex.quote(str(environment_python))} -c \"import sys; print(sys.executable); print(sys.version.split()[0])\"",
+            cwd=resolved_env,
+            allow_failure=True,
+            emit_progress=False,
+        )
+        pip_result = self.run_command(
+            f"{shlex.quote(str(environment_python))} -m pip --version",
+            cwd=resolved_env,
+            allow_failure=True,
+            emit_progress=False,
+        )
+        module_results: dict[str, bool] = {}
+        for module in modules or []:
+            probe = self.run_command(
+                f"{shlex.quote(str(environment_python))} -c \"import {module}\"",
+                cwd=resolved_env,
+                allow_failure=True,
+                emit_progress=False,
+            )
+            module_results[module] = probe["returncode"] == 0
+        payload = {
+            "environment_path": str(resolved_env),
+            "python_path": str(environment_python),
+            "python_available": python_result["returncode"] == 0,
+            "python_version": python_result["stdout_tail"].splitlines()[-1].strip() if python_result["returncode"] == 0 and python_result["stdout_tail"] else None,
+            "pip_available": pip_result["returncode"] == 0,
+            "pip_version": pip_result["stdout_tail"] or None,
+            "modules": module_results,
+        }
+        self._record_tool_event("inspect_python_environment", payload)
+        return payload
+
+    def bootstrap_python_environment(self, project_path: str) -> dict[str, Any]:
+        payload = self.ensure_python_environment(project_path=project_path, dependency_strategy="auto")
         self._record_tool_event("bootstrap_python_environment", payload)
         return payload
 
@@ -512,6 +759,41 @@ class ResearchTools:
             cwd=repository,
             allow_failure=False,
         )
+
+    def run_in_environment(
+        self,
+        environment_path: str,
+        command: str,
+        cwd: str | Path | None = None,
+        gpu_ids: list[int] | None = None,
+        log_path: str | None = None,
+        allow_failure: bool = True,
+    ) -> dict[str, Any]:
+        resolved_env = self._resolve_path(environment_path, default_root=self.managed_env_root)
+        env_bin = self._environment_bin(resolved_env)
+        env_overrides = {
+            "VIRTUAL_ENV": str(resolved_env),
+            "PATH": f"{env_bin}:{os.environ.get('PATH', '')}",
+        }
+        result = self.run_command(
+            command,
+            cwd=cwd,
+            env_overrides=env_overrides,
+            gpu_ids=gpu_ids,
+            log_path=log_path,
+            allow_failure=allow_failure,
+        )
+        self._record_tool_event(
+            "run_in_environment",
+            {
+                "environment_path": str(resolved_env),
+                "command": command,
+                "cwd": result["cwd"],
+                "returncode": result["returncode"],
+                "log_path": result["log_path"],
+            },
+        )
+        return result
 
     def run_command(
         self,
@@ -681,6 +963,28 @@ class ResearchTools:
             return self.bootstrap_python_environment(project_path)
 
         @function_tool
+        def ensure_python_environment(
+            project_path: str,
+            environment_name: str | None = None,
+            python_spec: str | None = None,
+            dependency_strategy: str = "auto",
+            editable_install: bool = True,
+        ) -> dict[str, Any]:
+            """Create or repair a managed uv environment for a project inside the current research work directory."""
+            return self.ensure_python_environment(
+                project_path=project_path,
+                environment_name=environment_name,
+                python_spec=python_spec,
+                dependency_strategy=dependency_strategy,
+                editable_install=editable_install,
+            )
+
+        @function_tool
+        def inspect_python_environment(environment_path: str, modules: list[str] | None = None) -> dict[str, Any]:
+            """Inspect a managed Python environment and optionally probe selected imports."""
+            return self.inspect_python_environment(environment_path, modules=modules)
+
+        @function_tool
         def copy_tree(source_path: str, destination_path: str) -> dict[str, Any]:
             """Copy a repository or workspace tree to create a child program candidate."""
             return self.copy_tree(source_path, destination_path)
@@ -723,6 +1027,25 @@ class ResearchTools:
             )
 
         @function_tool
+        def run_in_environment(
+            environment_path: str,
+            command: str,
+            cwd: str | None = None,
+            gpu_ids: list[int] | None = None,
+            log_path: str | None = None,
+            allow_failure: bool = True,
+        ) -> dict[str, Any]:
+            """Run a command inside a managed Python environment created by the research system."""
+            return self.run_in_environment(
+                environment_path=environment_path,
+                command=command,
+                cwd=cwd,
+                gpu_ids=gpu_ids,
+                log_path=log_path,
+                allow_failure=allow_failure,
+            )
+
+        @function_tool
         def parse_json_file(path: str) -> dict[str, Any]:
             """Parse a JSON file produced by an experiment or external repository."""
             return self.parse_json_file(path)
@@ -752,12 +1075,15 @@ class ResearchTools:
             find_files,
             detect_project_manifests,
             bootstrap_python_environment,
+            ensure_python_environment,
+            inspect_python_environment,
             copy_tree,
             write_text_file,
             write_json_file,
             write_patch_file,
             apply_patch_file,
             run_command,
+            run_in_environment,
             parse_json_file,
             parse_metrics_file,
             write_report,

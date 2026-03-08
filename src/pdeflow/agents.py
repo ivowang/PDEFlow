@@ -321,6 +321,7 @@ You must use tools to:
 - create a child workspace from the parent program or repository
 - write or modify code files
 - run at least one validation command such as import, compile, or a smoke test
+- if repo dependencies are missing, provision a managed uv environment with tools instead of hand-writing `python -m venv` / `pip` flows
 
 Rules:
 - Do not claim a file was edited unless you used a tool to write it.
@@ -363,6 +364,7 @@ You must:
 - choose GPU usage and experiment duration indirectly through the command and stopping rules
 - use verified local artifacts when they exist, and add concrete download/bootstrap setup steps when required data or checkpoints are not yet local
 - avoid plans that point to nonexistent dataset or checkpoint paths without a preceding acquisition step grounded in verified artifacts
+- prefer managed uv environments over ad hoc `python -m venv`, `source`, or bare `pip install`
 
 Rules:
 - Do not invent commands that are impossible to run from the inspected repository layout.
@@ -380,6 +382,7 @@ Rules:
             "method_designs": [item.model_dump(mode="python") for item in state.method_designs[-2:]],
             "existing_experiments": [item.model_dump(mode="python") for item in state.experiment_records[-10:]],
             "existing_plans": [item.model_dump(mode="python") for item in state.experiment_plans[-10:]],
+            "managed_env_root": str(tools.managed_env_root),
             "preferred_log_root": str(tools.memory.experiments_dir),
         }
 
@@ -405,6 +408,8 @@ You must:
 - execute setup and launch commands from the pending experiment plans
 - parse metrics from produced files or logs
 - record failures when commands or metrics extraction fail
+- repair invalid environment setup on the fly when possible by provisioning a managed uv environment and re-running inside it
+- prefer `ensure_python_environment`, `inspect_python_environment`, and `run_in_environment` over ad hoc `python -m venv`, `source`, or `pip` shell sequences
 
 Rules:
 - Do not fabricate metrics or success claims.
@@ -418,6 +423,9 @@ Rules:
             "research_brief": state.research_brief.model_dump(mode="python"),
             "pending_experiment_plans": pending_plans[-4:],
             "existing_experiments": [item.model_dump(mode="python") for item in state.experiment_records[-10:]],
+            "program_candidates": [item.model_dump(mode="python") for item in state.program_candidates[-10:]],
+            "repositories": [item.model_dump(mode="python") for item in state.repositories[-10:]],
+            "managed_env_root": str(tools.managed_env_root),
             "best_known_results": state.best_known_results,
         }
 
