@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import traceback
 
 from .agents import (
     AcquisitionAgent,
@@ -150,15 +151,23 @@ class ResearchManager:
         self._log(
             f"Starting phase {spec.phase.value} with {agent.name}. Cycle={state.cycle_index}."
         )
-        summary = agent.run(state, self.tools, self.runtime)
-        self.memory.record_phase(spec.phase, summary, list(spec.outputs))
-        self.memory.save_state(state, label=spec.phase.value)
-        self._log(
-            f"Completed phase {spec.phase.value} with {agent.name}. Summary: {summary}"
-        )
-        for line in self._phase_snapshot(state, spec.phase):
-            self._log(line)
-        return summary
+        try:
+            summary = agent.run(state, self.tools, self.runtime)
+            self.memory.record_phase(spec.phase, summary, list(spec.outputs))
+            self.memory.save_state(state, label=spec.phase.value)
+            self._log(
+                f"Completed phase {spec.phase.value} with {agent.name}. Summary: {summary}"
+            )
+            for line in self._phase_snapshot(state, spec.phase):
+                self._log(line)
+            return summary
+        except Exception:
+            stack = traceback.format_exc()
+            self._log(
+                f"Phase {spec.phase.value} with {agent.name} failed. Traceback follows.\n{stack}"
+            )
+            self.memory.save_state(state, label=f"{spec.phase.value}_failed")
+            raise
 
     def _should_continue(self, state: ResearchState) -> bool:
         if not state.reflections:

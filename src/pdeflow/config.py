@@ -22,6 +22,7 @@ class RuntimeConfig(BaseModel):
     backend: str = "openai_agents"
     provider: str = "openai"
     model: str = "gpt-4.1"
+    max_turns: int = 32
     api_key_env_var: str | None = None
     api_base_url: str | None = None
     websocket_base_url: str | None = None

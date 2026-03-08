@@ -1,6 +1,6 @@
 {
   "project_name": "ai4s-cns-pde-agent",
-  "run_name": "pde_1",
+  "run_name": "pde",
   "research_brief": {
     "title": "AI4S CNS Challenge Task 4: Neural Operator PDE Agent",
     "question": "Build an autonomous scientific agent that can independently complete the PDE neural-operator research loop for the AI4S CNS Challenge Task 4, including literature understanding, bottleneck diagnosis, method innovation, code evolution, experiment execution, physical validation, and report generation.",
@@ -48,6 +48,7 @@
     "backend": "openai_agents",
     "provider": "openrouter",
     "model": "openai/gpt-5.4",
+    "max_turns": 32,
     "api_key_env_var": "OPENROUTER_API_KEY",
     "api_base_url": "https://openrouter.ai/api/v1",
     "use_responses_api": false,
@@ -65,7 +66,7 @@
     "auto_bootstrap_environments": true,
     "allow_shell_commands": true,
     "allow_package_installation": true,
-    "work_directory": "/data0/ziyi/PDEFlow_Runs/pde_1",
+    "work_directory": "/data0/ziyi/PDEFlow_Runs/{run_name}",
     "workspace_root": "external_assets"
   },
   "resource_policy": {

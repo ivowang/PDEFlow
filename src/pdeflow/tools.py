@@ -47,6 +47,13 @@ class ResearchTools:
         self.run_workspace_root = ensure_dir(memory.root / "workspaces")
 
     def _progress_message_for_tool_event(self, tool_name: str, payload: dict[str, Any]) -> str | None:
+        if tool_name == "inspect_secret_status":
+            return f"Inspected secret status. tracked={payload.get('count', 0)}."
+        if tool_name == "inspect_compute_environment":
+            return (
+                "Inspected compute environment. "
+                f"selected_gpus={payload.get('selected_gpu_ids', [])} uv_available={payload.get('uv_available', False)}."
+            )
         if tool_name == "search_arxiv_papers":
             return f"Tool search_arxiv_papers finished. query='{payload.get('query', '')}' results={payload.get('count', 0)}."
         if tool_name == "search_github_repositories":
@@ -58,6 +65,11 @@ class ResearchTools:
         if tool_name == "extract_pdf_text":
             return f"Extracted PDF text from {payload.get('path', '')}."
         if tool_name == "clone_repository":
+            if payload.get("status") == "failed":
+                return (
+                    "Repository clone failed for "
+                    f"{payload.get('repo_url', '')}: {payload.get('error', 'unknown error')}."
+                )
             return f"Repository available at {payload.get('path', '')} from {payload.get('repo_url', '')}."
         if tool_name == "detect_project_manifests":
             return f"Detected project manifests in {payload.get('path', '')}. count={len(payload.get('manifests', []))}."
@@ -95,6 +107,16 @@ class ResearchTools:
             self.run_workspace_root.resolve(),
         ]
 
+    def _command_requires_shell(self, command: str) -> bool:
+        stripped = command.strip()
+        if not stripped:
+            return False
+        shell_tokens = ("&&", "||", ";", "|", ">", "<", "$(", "`", "\n")
+        if any(token in stripped for token in shell_tokens):
+            return True
+        first_token = stripped.split()[0]
+        return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=.*", first_token))
+
     def _resolve_path(self, path_str: str, default_root: Path | None = None) -> Path:
         raw_path = Path(path_str)
         candidate = raw_path if raw_path.is_absolute() else (default_root or self.repo_root) / raw_path
@@ -117,6 +139,7 @@ class ResearchTools:
         ]
         for status in statuses:
             self.memory.record_secret_status(status)
+        self._record_tool_event("inspect_secret_status", {"count": len(statuses)})
         return statuses
 
     def inspect_compute_environment(self) -> EnvironmentSnapshot:
@@ -157,6 +180,14 @@ class ResearchTools:
             selected_gpu_ids=selected,
             gpu_descriptions=gpu_descriptions,
             notes=notes,
+        )
+        self._record_tool_event(
+            "inspect_compute_environment",
+            {
+                "python_version": snapshot.python_version,
+                "uv_available": snapshot.uv_available,
+                "selected_gpu_ids": snapshot.selected_gpu_ids,
+            },
         )
         return snapshot
 
@@ -272,17 +303,33 @@ class ResearchTools:
     def clone_repository(self, repo_url: str, destination_name: str | None = None) -> dict[str, Any]:
         if not self.config.execution.network_enabled:
             raise RuntimeError("Network-backed retrieval is disabled in the current config.")
-        repo_name = destination_name or slugify(repo_url.rsplit("/", 1)[-1].replace(".git", ""))
+        raw_name = destination_name or repo_url.rsplit("/", 1)[-1].replace(".git", "")
+        repo_name = slugify(Path(raw_name).name.replace(".git", "")) or "repository"
         local_path = self.shared_workspace_root / "repos" / repo_name
         ensure_dir(local_path.parent)
         if local_path.exists():
             result = {"status": "available", "path": str(local_path), "repo_url": repo_url}
             self._record_tool_event("clone_repository", result)
             return result
-        command = f"git clone {shlex.quote(repo_url)} {shlex.quote(str(local_path))}"
-        run_result = self.run_command(command, cwd=self.repo_root, allow_failure=False)
+        command = f"timeout 300 git clone --depth 1 {shlex.quote(repo_url)} {shlex.quote(str(local_path))}"
+        run_result = self.run_command(
+            command,
+            cwd=self.repo_root,
+            env_overrides={"GIT_TERMINAL_PROMPT": "0"},
+            allow_failure=True,
+        )
         if run_result["returncode"] != 0:
-            raise RuntimeError(run_result["stderr_tail"] or f"Failed to clone {repo_url}")
+            if local_path.exists():
+                shutil.rmtree(local_path, ignore_errors=True)
+            result = {
+                "status": "failed",
+                "path": str(local_path),
+                "repo_url": repo_url,
+                "error": run_result["stderr_tail"] or f"Failed to clone {repo_url}",
+                "log_path": run_result["log_path"],
+            }
+            self._record_tool_event("clone_repository", result)
+            return result
         commit_result = self.run_command("git rev-parse HEAD", cwd=local_path, allow_failure=True)
         result = {
             "status": "cloned",
@@ -496,8 +543,9 @@ class ResearchTools:
             self.memory.record_process(
                 f"Running command{gpu_text} in {working_directory}: {compact}"
             )
+        popen_args = ["bash", "-lc", command] if self._command_requires_shell(command) else shlex.split(command)
         process = subprocess.Popen(
-            shlex.split(command),
+            popen_args,
             cwd=str(working_directory),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -663,7 +711,7 @@ class ResearchTools:
             cwd: str | None = None,
             gpu_ids: list[int] | None = None,
             log_path: str | None = None,
-            allow_failure: bool = False,
+            allow_failure: bool = True,
         ) -> dict[str, Any]:
             """Run a shell command in a managed directory and capture a persistent log."""
             return self.run_command(

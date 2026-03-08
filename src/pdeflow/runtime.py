@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
@@ -130,6 +131,63 @@ class RuntimeAdapter:
             tracing_disabled=self.runtime_config.tracing_disabled,
         )
 
+    def _should_use_prompt_json_output(self) -> bool:
+        return self._resolved_provider() == "openrouter"
+
+    def _build_prompt_json_instructions(
+        self,
+        instructions: str,
+        output_type: type[OutputT],
+    ) -> str:
+        schema_json = json.dumps(output_type.model_json_schema(), ensure_ascii=False, indent=2)
+        return (
+            instructions.strip()
+            + "\n\n"
+            + "Output requirements:\n"
+            + "- Return exactly one valid JSON object.\n"
+            + "- Do not wrap the JSON in markdown fences.\n"
+            + "- Do not add commentary before or after the JSON.\n"
+            + "- Ensure the JSON validates against the following schema.\n\n"
+            + schema_json
+        )
+
+    def _coerce_final_output_to_text(self, final_output: Any) -> str:
+        if isinstance(final_output, str):
+            return final_output
+        if isinstance(final_output, BaseModel):
+            return final_output.model_dump_json(indent=2)
+        if isinstance(final_output, (dict, list)):
+            return json.dumps(final_output, ensure_ascii=False, indent=2)
+        return str(final_output)
+
+    def _extract_json_object_text(self, text: str) -> str:
+        stripped = text.strip()
+        if stripped.startswith("```") and stripped.endswith("```"):
+            lines = stripped.splitlines()
+            if len(lines) >= 3:
+                stripped = "\n".join(lines[1:-1]).strip()
+        try:
+            json.loads(stripped)
+            return stripped
+        except json.JSONDecodeError:
+            pass
+
+        object_match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
+        if object_match:
+            candidate = object_match.group(0)
+            json.loads(candidate)
+            return candidate
+        raise json.JSONDecodeError("No valid JSON object found in model output.", stripped, 0)
+
+    def _validate_prompt_json_output(
+        self,
+        final_output: Any,
+        output_type: type[OutputT],
+    ) -> OutputT:
+        raw_text = self._coerce_final_output_to_text(final_output)
+        payload = json.loads(self._extract_json_object_text(raw_text))
+        return output_type.model_validate(payload)
+
     def run_structured(
         self,
         specialist_name: str,
@@ -140,11 +198,16 @@ class RuntimeAdapter:
         tools: list[Any] | None = None,
     ) -> OutputT:
         self.ensure_ready()
+        use_prompt_json_output = self._should_use_prompt_json_output()
         agent = Agent(
             name=specialist_name,
-            instructions=instructions,
+            instructions=(
+                self._build_prompt_json_instructions(instructions, output_type)
+                if use_prompt_json_output
+                else instructions
+            ),
             model=self.model,
-            output_type=output_type,
+            output_type=None if use_prompt_json_output else output_type,
             tools=tools or [],
         )
         run_config = self._build_run_config(specialist_name)
@@ -152,10 +215,13 @@ class RuntimeAdapter:
         result = Runner.run_sync(
             agent,
             json.dumps(payload, ensure_ascii=False, indent=2),
+            max_turns=self.runtime_config.max_turns,
             session=session,
             run_config=run_config,
         )
         final_output = result.final_output
+        if use_prompt_json_output:
+            return self._validate_prompt_json_output(final_output, output_type)
         if isinstance(final_output, output_type):
             return final_output
         if isinstance(final_output, BaseModel):

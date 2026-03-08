@@ -57,7 +57,7 @@ class BaseResearchAgent(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         raise NotImplementedError
 
     @abstractmethod
@@ -68,7 +68,7 @@ class BaseResearchAgent(ABC):
         output = runtime.run_structured(
             specialist_name=self.name,
             instructions=self.build_instructions(state),
-            payload=self.build_payload(state),
+            payload=self.build_payload(state, tools),
             session_id=f"{state.run_name}-{self.phase.value}-cycle-{state.cycle_index}",
             output_type=self.output_model,
             tools=self.build_tools(tools),
@@ -96,7 +96,7 @@ Rules:
 - Return only structured output matching the schema.
 """
 
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         return {
             "research_brief": state.research_brief.model_dump(mode="python"),
             "already_known_papers": [note.title for note in state.literature_notes],
@@ -135,7 +135,7 @@ Rules:
 - Return only artifacts and repositories that were actually verified with tools.
 """
 
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         return {
             "research_brief": state.research_brief.model_dump(mode="python"),
             "literature_titles": [note.title for note in state.literature_notes[:12]],
@@ -185,7 +185,7 @@ Rules:
 - Return concise but concrete evaluation criteria.
 """
 
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         return {
             "research_brief": state.research_brief.model_dump(mode="python"),
             "literature_notes": [note.model_dump(mode="python") for note in state.literature_notes[:8]],
@@ -226,7 +226,7 @@ Rules:
 - Focus on bottlenecks that meaningfully constrain research progress.
 """
 
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         return {
             "research_brief": state.research_brief.model_dump(mode="python"),
             "problem_framing_notes": state.problem_framing_notes,
@@ -259,7 +259,7 @@ Rules:
 - Prefer hypotheses that can be executed with available repos, data, and compute.
 """
 
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         return {
             "research_brief": state.research_brief.model_dump(mode="python"),
             "bottlenecks": state.bottleneck_analysis,
@@ -292,7 +292,7 @@ Rules:
 - Keep the design concrete enough that the coding agent can implement it.
 """
 
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         return {
             "research_brief": state.research_brief.model_dump(mode="python"),
             "latest_hypotheses": [item.model_dump(mode="python") for item in state.hypotheses[-3:]],
@@ -328,7 +328,7 @@ Rules:
 - Return actual changed files and workspace paths.
 """
 
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         parent_programs = [item.model_dump(mode="python") for item in state.program_candidates[-8:]]
         return {
             "research_brief": state.research_brief.model_dump(mode="python"),
@@ -361,6 +361,8 @@ You must:
 - decide which programs to run next
 - produce concrete setup commands, launch commands, working directories, logs, and expected outputs
 - choose GPU usage and experiment duration indirectly through the command and stopping rules
+- use verified local artifacts when they exist, and add concrete download/bootstrap setup steps when required data or checkpoints are not yet local
+- avoid plans that point to nonexistent dataset or checkpoint paths without a preceding acquisition step grounded in verified artifacts
 
 Rules:
 - Do not invent commands that are impossible to run from the inspected repository layout.
@@ -368,10 +370,12 @@ Rules:
 - Stopping rules should be scientific and metric-driven, not based on an arbitrary wall-clock cap.
 """
 
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         return {
             "research_brief": state.research_brief.model_dump(mode="python"),
             "environment_snapshot": state.environment_snapshot.model_dump(mode="python") if state.environment_snapshot else None,
+            "external_artifacts": [item.model_dump(mode="python") for item in state.external_artifacts[-20:]],
+            "repositories": [item.model_dump(mode="python") for item in state.repositories[-10:]],
             "program_candidates": [item.model_dump(mode="python") for item in state.program_candidates[-10:]],
             "method_designs": [item.model_dump(mode="python") for item in state.method_designs[-2:]],
             "existing_experiments": [item.model_dump(mode="python") for item in state.experiment_records[-10:]],
@@ -408,7 +412,7 @@ Rules:
 - Update best-known results only from actual parsed outputs.
 """
 
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         pending_plans = [item.model_dump(mode="python") for item in state.experiment_plans if item.status == "planned"]
         return {
             "research_brief": state.research_brief.model_dump(mode="python"),
@@ -453,7 +457,7 @@ Rules:
 - If progress is insufficient or blocked, say why and propose the next move.
 """
 
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         return {
             "research_brief": state.research_brief.model_dump(mode="python"),
             "cycle_index": state.cycle_index,
@@ -499,7 +503,7 @@ Rules:
 - Return the paths of the files you actually wrote.
 """
 
-    def build_payload(self, state: ResearchState) -> dict[str, Any]:
+    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
         return {
             "research_brief": state.research_brief.model_dump(mode="python"),
             "literature_notes": [item.model_dump(mode="python") for item in state.literature_notes],
