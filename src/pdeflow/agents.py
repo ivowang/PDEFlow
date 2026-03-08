@@ -128,6 +128,8 @@ You must:
 - search for relevant repositories, benchmark code, data sources, checkpoints, and documentation
 - clone repositories and bootstrap environments when needed
 - identify at least one viable baseline program candidate grounded in acquired assets
+- when recent experiment or setup failures expose a concrete missing prerequisite, prioritize fixing that blocker before collecting optional new assets
+- verify that downloaded datasets, checkpoints, and repositories exist at the exact local paths needed by upcoming experiment plans
 
 Rules:
 - Do not assume repository URLs, dataset locations, or checkpoint links unless a tool confirmed them.
@@ -141,6 +143,10 @@ Rules:
             "literature_titles": [note.title for note in state.literature_notes[:12]],
             "open_questions": state.open_questions[:12],
             "existing_repositories": [repo.name for repo in state.repositories],
+            "failure_summaries": state.failure_summaries[-12:],
+            "recent_experiment_records": [record.model_dump(mode="python") for record in state.experiment_records[-8:]],
+            "existing_experiment_plans": [plan.model_dump(mode="python") for plan in state.experiment_plans[-12:]],
+            "work_directory": state.work_directory,
         }
 
     def apply_output(self, state: ResearchState, tools: ResearchTools, output: AcquisitionPhaseOutput) -> str:
@@ -365,6 +371,8 @@ You must:
 - use verified local artifacts when they exist, and add concrete download/bootstrap setup steps when required data or checkpoints are not yet local
 - avoid plans that point to nonexistent dataset or checkpoint paths without a preceding acquisition step grounded in verified artifacts
 - prefer managed uv environments over ad hoc `python -m venv`, `source`, or bare `pip install`
+- a blocked or setup-failed baseline does not count as a completed baseline
+- if the selected baseline has no completed experiment record with real outputs, do not schedule downstream candidate launch plans except prerequisite acquisition/verification or matched baseline reruns
 
 Rules:
 - Do not invent commands that are impossible to run from the inspected repository layout.
@@ -384,6 +392,8 @@ Rules:
             "existing_plans": [item.model_dump(mode="python") for item in state.experiment_plans[-10:]],
             "managed_env_root": str(tools.managed_env_root),
             "preferred_log_root": str(tools.memory.experiments_dir),
+            "selected_baseline_program_id": state.selected_baseline_program_id,
+            "failure_summaries": state.failure_summaries[-12:],
         }
 
     def apply_output(self, state: ResearchState, tools: ResearchTools, output: ExperimentPlanningPhaseOutput) -> str:
@@ -410,6 +420,8 @@ You must:
 - record failures when commands or metrics extraction fail
 - repair invalid environment setup on the fly when possible by provisioning a managed uv environment and re-running inside it
 - prefer `ensure_python_environment`, `inspect_python_environment`, and `run_in_environment` over ad hoc `python -m venv`, `source`, or `pip` shell sequences
+- if setup fails because a required dataset, checkpoint, repository file, or environment dependency is missing, attempt to acquire or repair that prerequisite with tools before declaring the plan blocked
+- only report a plan as completed when its intended execution actually ran and produced observed outputs; setup failures are blockers, not completions
 
 Rules:
 - Do not fabricate metrics or success claims.
@@ -425,6 +437,7 @@ Rules:
             "existing_experiments": [item.model_dump(mode="python") for item in state.experiment_records[-10:]],
             "program_candidates": [item.model_dump(mode="python") for item in state.program_candidates[-10:]],
             "repositories": [item.model_dump(mode="python") for item in state.repositories[-10:]],
+            "external_artifacts": [item.model_dump(mode="python") for item in state.external_artifacts[-20:]],
             "managed_env_root": str(tools.managed_env_root),
             "best_known_results": state.best_known_results,
         }
@@ -434,10 +447,17 @@ Rules:
         state.best_known_results.update(output.best_known_results)
         state.failure_summaries = dedupe_strings([*state.failure_summaries, *output.failure_summaries])
         state.next_actions = output.next_actions
-        completed_plan_ids = {record.plan_id for record in output.experiment_records}
+        latest_record_by_plan = {record.plan_id: record for record in output.experiment_records}
         for plan in state.experiment_plans:
-            if plan.plan_id in completed_plan_ids:
+            record = latest_record_by_plan.get(plan.plan_id)
+            if record is None:
+                continue
+            if record.status == "completed":
                 plan.status = "completed"
+            elif "block" in record.status or "setup" in record.status:
+                plan.status = "blocked"
+            else:
+                plan.status = "failed"
         for item in output.experiment_records:
             tools.memory.record_experiment(item)
             tools.memory.update_program_result(
