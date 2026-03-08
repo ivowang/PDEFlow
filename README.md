@@ -132,15 +132,16 @@ The intended convention is that all research content for a run stays inside the 
 
 Live progress is also written to `<work_directory>/process.txt` and printed to the terminal during execution.
 
-## Key Files
+## Package Layout
 
-- [config.py](src/pdeflow/config.py): config schema
-- [schemas.py](src/pdeflow/schemas.py): state and memory schema
-- [tools.py](src/pdeflow/tools.py): executable tool surface
-- [agents.py](src/pdeflow/agents.py): specialist agents
-- [orchestration.py](src/pdeflow/orchestration.py): manager loop
-- [memory.py](src/pdeflow/memory.py): JSONL and SQLite memory
-- [runtime.py](src/pdeflow/runtime.py): OpenAI Agents SDK runtime adapter
+- [config/](src/pdeflow/config): runtime and execution config schema
+- [state/](src/pdeflow/state): research state and phase output models
+- [tools/](src/pdeflow/tools): executable tool surface
+- [agents/](src/pdeflow/agents): base agent class and specialist agents
+- [orchestration/](src/pdeflow/orchestration): manager loop and cycle routing
+- [memory/](src/pdeflow/memory): JSONL and SQLite-backed memory
+- [runtime/](src/pdeflow/runtime): OpenAI Agents SDK runtime adapter
+- [integrations/](src/pdeflow/integrations): generic repository/runtime integration helpers
 
 ## Notes
 
@@ -148,6 +149,7 @@ Live progress is also written to `<work_directory>/process.txt` and printed to t
 - `runtime.provider=openrouter` requires `OPENROUTER_API_KEY`.
 - OpenRouter is wired through the OpenAI-compatible path in the Agents SDK and defaults to `chat_completions`.
 - Under OpenRouter, structured phase outputs use schema-guided JSON plus a repair fallback so a malformed model JSON response does not immediately crash the phase.
+- Experiment plans are grounded against verified local artifacts by inspecting repository entrypoints and configs; this is implemented as a generic capability, not a benchmark-specific adapter.
 - The current repository is live-only. There is no mock runtime.
 - The system can create and repair managed `uv` environments under the run work directory instead of relying on a pre-existing project `venv`.
 - The system uses real shell commands, downloads, repo cloning, and environment setup, so it should be run on a controlled research machine.

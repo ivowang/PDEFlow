@@ -9,6 +9,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from typing import Any
 from urllib.parse import urlencode
 import xml.etree.ElementTree as ET
@@ -16,10 +18,10 @@ import xml.etree.ElementTree as ET
 import httpx
 from pypdf import PdfReader
 
-from .config import SystemConfig
-from .memory import ResearchMemory
-from .schemas import EnvironmentSnapshot, SecretStatus
-from .utils import ensure_dir, now_utc, short_hash, slugify, write_json
+from ..config import SystemConfig
+from ..memory import ResearchMemory
+from ..state import EnvironmentSnapshot, SecretStatus
+from ..common import ensure_dir, now_utc, short_hash, slugify, write_json
 
 try:
     from agents import function_tool
@@ -819,9 +821,9 @@ class ResearchTools:
             env.update(env_overrides)
         if gpu_ids:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu_id) for gpu_id in gpu_ids)
+        compact = command if len(command) <= 140 else command[:137] + "..."
         if emit_progress:
             gpu_text = f" on GPUs {gpu_ids}" if gpu_ids else ""
-            compact = command if len(command) <= 140 else command[:137] + "..."
             self.memory.record_process(
                 f"Running command{gpu_text} in {working_directory}: {compact}"
             )
@@ -835,12 +837,41 @@ class ResearchTools:
             env=env,
         )
         tail_lines: deque[str] = deque(maxlen=200)
+        heartbeat_stop = threading.Event()
+        started_at = time.monotonic()
+
+        def emit_heartbeat() -> None:
+            interval_seconds = 60
+            while not heartbeat_stop.wait(interval_seconds):
+                if process.poll() is not None:
+                    return
+                elapsed = int(time.monotonic() - started_at)
+                last_line = tail_lines[-1].strip() if tail_lines else ""
+                log_size = log_file.stat().st_size if log_file.exists() else 0
+                suffix = f" last_output={last_line[:160]}" if last_line else ""
+                self.memory.record_process(
+                    "Command heartbeat: "
+                    f"elapsed={elapsed}s cwd={working_directory} log={log_file} bytes={log_size}. "
+                    f"Command: {compact}.{suffix}"
+                )
+
+        heartbeat_thread = (
+            threading.Thread(target=emit_heartbeat, name="pdeflow-command-heartbeat", daemon=True)
+            if emit_progress
+            else None
+        )
+        if heartbeat_thread is not None:
+            heartbeat_thread.start()
         with log_file.open("w", encoding="utf-8") as handle:
             assert process.stdout is not None
             for line in process.stdout:
                 handle.write(line)
+                handle.flush()
                 tail_lines.append(line.rstrip("\n"))
         return_code = process.wait()
+        heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=1)
         stdout_tail = "\n".join(tail_lines)
         result = {
             "command": command,

@@ -5,7 +5,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
-from .schemas import (
+from ..state import (
     ArtifactRecord,
     DiaryEntry,
     ExperimentPlan,
@@ -18,7 +18,7 @@ from .schemas import (
     ResearchState,
     SecretStatus,
 )
-from .utils import append_jsonl, ensure_dir, now_utc, to_plain_data, write_json
+from ..common import append_jsonl, ensure_dir, now_utc, to_plain_data, write_json
 
 
 class ResearchMemory:

@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from typing import Any
 
-from pydantic import BaseModel
-
-from .runtime import RuntimeAdapter
-from .schemas import (
+from ..state import (
     AcquisitionPhaseOutput,
     CodingPhaseOutput,
     DiagnosisPhaseOutput,
-    DiaryEntry,
     ExperimentPhaseOutput,
     ExperimentPlanningPhaseOutput,
     HypothesisPhaseOutput,
@@ -22,60 +17,9 @@ from .schemas import (
     ResearchPhase,
     ResearchState,
 )
-from .tools import ResearchTools
-from .utils import dedupe_strings, now_utc, short_hash, upsert_by_attr
-
-
-class BaseResearchAgent(ABC):
-    name = "BaseResearchAgent"
-    phase = ResearchPhase.LITERATURE_REVIEW
-    output_model: type[BaseModel]
-
-    def record_diary(self, state: ResearchState, tools: ResearchTools, summary: str) -> None:
-        entry = DiaryEntry(
-            entry_id=f"{self.phase.value}-{short_hash(state.run_name, summary, now_utc())}",
-            phase=self.phase.value,
-            title=f"{self.phase.value.replace('_', ' ').title()} completed",
-            body=summary,
-            tags=[self.phase.value, self.name],
-        )
-        state.research_diary.append(entry)
-        tools.memory.record_diary(entry)
-        tools.memory.record_episode(label=entry.title, body=entry.body, phase=self.phase)
-
-    def record_semantic_notes(self, state: ResearchState, tools: ResearchTools, notes: list[str]) -> None:
-        for note in notes:
-            if note not in state.semantic_memory_notes:
-                state.semantic_memory_notes.append(note)
-                tools.memory.record_semantic(note=note, source=self.name)
-
-    def build_tools(self, tools: ResearchTools) -> list[Any]:
-        return tools.build_function_tools()
-
-    @abstractmethod
-    def build_instructions(self, state: ResearchState) -> str:
-        raise NotImplementedError
-
-    @abstractmethod
-    def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def apply_output(self, state: ResearchState, tools: ResearchTools, output: BaseModel) -> str:
-        raise NotImplementedError
-
-    def run(self, state: ResearchState, tools: ResearchTools, runtime: RuntimeAdapter) -> str:
-        output = runtime.run_structured(
-            specialist_name=self.name,
-            instructions=self.build_instructions(state),
-            payload=self.build_payload(state, tools),
-            session_id=f"{state.run_name}-{self.phase.value}-cycle-{state.cycle_index}",
-            output_type=self.output_model,
-            tools=self.build_tools(tools),
-        )
-        summary = self.apply_output(state, tools, output)
-        self.record_diary(state, tools, summary)
-        return summary
+from ..tools import ResearchTools
+from ..common import dedupe_strings, upsert_by_attr
+from .base import BaseResearchAgent
 
 
 class LiteratureAgent(BaseResearchAgent):
@@ -373,6 +317,7 @@ You must:
 - prefer managed uv environments over ad hoc `python -m venv`, `source`, or bare `pip install`
 - a blocked or setup-failed baseline does not count as a completed baseline
 - if the selected baseline has no completed experiment record with real outputs, do not schedule downstream candidate launch plans except prerequisite acquisition/verification or matched baseline reruns
+- inspect the repository entrypoint and config semantics before writing launch commands; if the code separates dataset filename from dataset root, pass both correctly and override placeholder defaults with verified local artifact paths
 
 Rules:
 - Do not invent commands that are impossible to run from the inspected repository layout.
@@ -422,6 +367,7 @@ You must:
 - prefer `ensure_python_environment`, `inspect_python_environment`, and `run_in_environment` over ad hoc `python -m venv`, `source`, or `pip` shell sequences
 - if setup fails because a required dataset, checkpoint, repository file, or environment dependency is missing, attempt to acquire or repair that prerequisite with tools before declaring the plan blocked
 - only report a plan as completed when its intended execution actually ran and produced observed outputs; setup failures are blockers, not completions
+- validate code-level path semantics before launch: when a repository expects both a dataset filename and a dataset root, ensure the launch command contains the correct local root instead of falling back to placeholder defaults discovered in repository code or configs
 
 Rules:
 - Do not fabricate metrics or success claims.

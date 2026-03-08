@@ -6,7 +6,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from .config import RuntimeConfig
+from ..config import RuntimeConfig
 
 try:
     from agents import Agent, OpenAIProvider, RunConfig, Runner, SQLiteSession

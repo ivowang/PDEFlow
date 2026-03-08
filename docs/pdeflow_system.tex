@@ -89,6 +89,8 @@ At the highest level, PDEFlow consists of five components:
   \item a local memory layer backed by JSONL and SQLite.
 \end{enumerate}
 
+In the implementation, these concerns are separated into dedicated Python packages for configuration, state schemas, runtime, tools, agents, orchestration, memory, and repository/runtime integrations. This package-level decomposition is intended to keep the system extensible as new domains, tools, and specialist roles are added.
+
 \subsection{Runtime Layer}
 The runtime is built on the OpenAI Agents SDK \cite{openai_agents_sdk}. Each specialist agent is instantiated with:
 \begin{itemize}[leftmargin=1.5em]
@@ -235,6 +237,8 @@ The tool surface is a core part of the system. The current implementation suppor
 \end{itemize}
 
 The managed environment layer is especially important in practice. PDEFlow can create run-local environments under the working directory, inspect their health, and execute commands inside them. This avoids relying on a pre-existing project \texttt{venv} and turns Python environment repair into part of the research workflow itself.
+
+Another practical systems requirement is command grounding. The implementation does not hardcode benchmark-specific path adapters. Instead, it performs a generic grounding pass that inspects planned launch commands, repository entry scripts, nearby configuration files, and verified local artifacts in order to infer missing path or root arguments before execution. This is designed to give the system a reusable ability to repair command/data mismatches across repositories rather than baking in one-off fixes for a single benchmark.
 
 This tool surface is what allows the system to move from a natural-language problem statement to executable scientific work.
 

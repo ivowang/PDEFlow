@@ -11,7 +11,7 @@ from pdeflow.config import ResearchBriefConfig, RuntimeConfig, SystemConfig
 from pdeflow.memory import ResearchMemory
 from pdeflow.orchestration import ResearchManager
 from pdeflow.runtime import RuntimeAdapter
-from pdeflow.schemas import ExperimentPhaseOutput, ExperimentPlan, ExperimentRecord, ResearchState
+from pdeflow.state import ExperimentPhaseOutput, ExperimentPlan, ExperimentRecord, ResearchState
 from pdeflow.tools import ResearchTools
 
 

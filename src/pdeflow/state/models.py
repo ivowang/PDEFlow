@@ -5,8 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .config import ResearchBriefConfig
-from .utils import now_utc
+from ..config import ResearchBriefConfig
+from ..common import now_utc
 
 
 class ResearchPhase(str, Enum):

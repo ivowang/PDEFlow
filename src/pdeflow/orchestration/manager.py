@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import traceback
 
-from .agents import (
+from ..agents import (
     AcquisitionAgent,
     CoderAgent,
     DiagnosisAgent,
@@ -17,11 +17,12 @@ from .agents import (
     ReflectionAgent,
     ReporterAgent,
 )
-from .config import SystemConfig
-from .memory import ResearchMemory
-from .runtime import RuntimeAdapter
-from .schemas import ResearchPhase, ResearchState
-from .tools import ResearchTools
+from ..config import SystemConfig
+from ..integrations.command_grounding import ground_experiment_plan
+from ..memory import ResearchMemory
+from ..runtime import RuntimeAdapter
+from ..state import ResearchPhase, ResearchState
+from ..tools import ResearchTools
 
 
 @dataclass(frozen=True)
@@ -156,7 +157,18 @@ class ResearchManager:
         self.memory.save_state(state, label="initial_state")
         return state
 
+    def _ground_experiment_plans(self, state: ResearchState) -> None:
+        grounded_plans = []
+        for plan in state.experiment_plans:
+            grounded_plan, messages = ground_experiment_plan(plan, state.external_artifacts)
+            grounded_plans.append(grounded_plan)
+            for message in messages:
+                self._log(f"Plan grounding: {message}")
+        state.experiment_plans = grounded_plans
+
     def _run_phase(self, state: ResearchState, spec: PhaseSpec) -> str:
+        if spec.phase == ResearchPhase.EXPERIMENT:
+            self._ground_experiment_plans(state)
         state.current_phase = spec.phase
         state.phase_history.append(spec.phase.value)
         agent = self.agents[spec.agent_key]
@@ -165,6 +177,8 @@ class ResearchManager:
         )
         try:
             summary = agent.run(state, self.tools, self.runtime)
+            if spec.phase == ResearchPhase.EXPERIMENT_PLANNING:
+                self._ground_experiment_plans(state)
             self.memory.record_phase(spec.phase, summary, list(spec.outputs))
             self.memory.save_state(state, label=spec.phase.value)
             self._log(
@@ -229,10 +243,10 @@ class ResearchManager:
             "hdf5",
             "checkpoint",
             "weights",
-            "data/pdebench",
             "download",
             "repository",
             "clone",
+            "artifact",
             "no module named",
             "ensurepip",
             "pip",
