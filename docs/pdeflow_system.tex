@@ -26,7 +26,7 @@
 \maketitle
 
 \begin{abstract}
-We present \textbf{PDEFlow}, a manager-centered autonomous scientific research system designed for PDE neural operator research. The system takes a high-level research brief as input and then autonomously performs literature retrieval, external artifact acquisition, environment setup, baseline discovery, hypothesis generation, method design, code modification, experiment execution, reflection, and report generation. Unlike benchmark-specific tuning pipelines or multi-agent chat systems, PDEFlow is organized around an explicit research state machine, executable tool use, structured external memory, and a program-lineage database that records parent-child relationships between baseline and candidate implementations. The design targets open-ended scientific ML settings in which the system must decide what information, code, data, and compute resources are needed before proposing and testing new methods. Although the initial landing problem is PDE neural operator research grounded in benchmarks such as PDEBench \cite{takamoto2022pdebench} and method families such as FNO \cite{li2020fno} and DeepONet \cite{lu2021deeponet}, the architecture is general enough to support broader self-evolving scientific agent workflows.
+We present \textbf{PDEFlow}, a manager-centered autonomous scientific research system designed for PDE neural operator research. The system takes a high-level research brief as input and then autonomously performs literature retrieval, external artifact acquisition, environment setup, baseline discovery, hypothesis generation, method design, code modification, experiment execution, reflection, and report generation. Unlike benchmark-specific tuning pipelines or multi-agent chat systems, PDEFlow is organized around an explicit research state machine, executable tool use, structured external memory, and a program-lineage database that records parent-child relationships between baseline and candidate implementations. The design targets open-ended scientific ML settings in which the system must decide what information, code, data, and compute resources are needed before proposing and testing new methods. A key systems property is dynamic blocker recovery: when execution reveals missing datasets, broken environments, or absent checkpoints, the manager routes the workflow back to acquisition and execution repair instead of blindly continuing downstream. Although the initial landing problem is PDE neural operator research grounded in benchmarks such as PDEBench \cite{takamoto2022pdebench} and method families such as FNO \cite{li2020fno} and DeepONet \cite{lu2021deeponet}, the architecture is general enough to support broader self-evolving scientific agent workflows.
 \end{abstract}
 
 \section{Introduction}
@@ -98,17 +98,21 @@ The runtime is built on the OpenAI Agents SDK \cite{openai_agents_sdk}. Each spe
   \item a persistent session identifier.
 \end{itemize}
 
-Structured outputs are implemented with Pydantic models, which keeps phase outputs machine-readable and easy to merge into shared state. In the current implementation, the runtime can be configured either for direct OpenAI access or for OpenRouter through the SDK's OpenAI-compatible provider path, allowing users without an OpenAI account to run the same workflow against an alternate model endpoint.
+Structured outputs are implemented with Pydantic models, which keeps phase outputs machine-readable and easy to merge into shared state. In the current implementation, the runtime can be configured either for direct OpenAI access or for OpenRouter through the SDK's OpenAI-compatible provider path, allowing users without an OpenAI account to run the same workflow against an alternate model endpoint. For OpenRouter-backed runs, PDEFlow uses schema-guided JSON generation with a repair pass that attempts to recover malformed model outputs before failing the phase. This reduces brittleness in long scientific runs where a single invalid JSON emission would otherwise terminate execution.
 
 \subsection{Manager}
 The manager is responsible for:
 \begin{itemize}[leftmargin=1.5em]
   \item initializing the run state,
   \item executing the front-end phases that establish context and execution readiness,
-  \item iterating over hypothesis, design, coding, planning, experiment, and reflection phases,
+  \item selecting either a normal research route or a recovery route on each cycle,
+  \item iterating over hypothesis, design, coding, planning, experiment, and reflection phases when no hard blocker is present,
+  \item routing back through acquisition and execution repair when hard blockers are detected,
   \item deciding when to stop based on reflection state, and
   \item launching the reporting phase at the end of the run.
 \end{itemize}
+
+This dynamic routing is important in scientific workflows because downstream analysis is meaningless if prerequisites such as datasets, checkpoints, or valid environments are still missing. PDEFlow therefore treats missing external prerequisites as manager-level control signals rather than as local warnings that can be ignored.
 
 \subsection{Specialist Agents}
 The current implementation includes:
@@ -129,7 +133,7 @@ The current implementation includes:
 Each agent is specialized by output contract rather than by autonomous social behavior.
 
 \section{Phase-Structured Research Loop}
-The workflow is represented as an explicit state machine:
+The workflow is represented as an explicit state machine with a fixed phase vocabulary:
 \begin{enumerate}[leftmargin=1.5em]
   \item \texttt{literature\_review}
   \item \texttt{acquisition}
@@ -164,11 +168,17 @@ The workflow is represented as an explicit state machine:
 \texttt{reporting} & Generate durable markdown reports from structured state. \\
 \bottomrule
 \end{tabular}
-\caption{Phase-structured research loop in PDEFlow.}
+\caption{Phase-structured research loop in PDEFlow. The manager uses these phases as a vocabulary, but the actual cycle route is dynamic.}
 \label{tab:phases}
 \end{table}
 
-The first four phases establish context and execution readiness. The next six phases form the iterative research loop. The final phase writes output artifacts.
+The first four phases establish context and execution readiness. The final phase writes output artifacts. Between them, the manager chooses one of two cycle patterns:
+\begin{itemize}[leftmargin=1.5em]
+  \item a \emph{normal route} that runs hypothesis, method design, coding, experiment planning, experiment, and reflection; or
+  \item a \emph{recovery route} that runs acquisition, experiment planning, experiment, and reflection when recent evidence indicates a hard blocker such as missing data, absent checkpoints, or a broken environment.
+\end{itemize}
+
+This distinction is operationally important. A setup-failed baseline is not treated as a completed baseline, and the manager does not permit repeated downstream method elaboration to substitute for missing experimental prerequisites.
 
 \section{State And Memory}
 \subsection{Structured State}
@@ -201,7 +211,7 @@ The memory layer stores:
 
 Program lineage is stored in SQLite so that parent-child relationships, evaluated candidates, and outcomes can be queried independently of the current run state.
 
-In the current implementation, each run is anchored to a configured working directory. State snapshots, acquired assets, cloned repositories, child workspaces, experiment logs, and generated reports are all stored under that run-local root so that a research campaign remains self-contained on disk.
+In the current implementation, each run is anchored to a configured working directory. State snapshots, acquired assets, cloned repositories, child workspaces, managed Python environments, managed Python interpreters, experiment logs, process traces, and generated reports are all stored under that run-local root so that a research campaign remains self-contained on disk.
 
 \section{Tool Layer}
 The tool surface is a core part of the system. The current implementation supports:
@@ -216,7 +226,7 @@ The tool surface is a core part of the system. The current implementation suppor
   \item directory-tree inspection,
   \item file reading and search,
   \item project manifest detection,
-  \item environment bootstrapping with \texttt{uv},
+  \item managed environment creation and repair with \texttt{uv},
   \item child-workspace creation,
   \item file writing and patch application,
   \item shell command execution,
@@ -224,7 +234,9 @@ The tool surface is a core part of the system. The current implementation suppor
   \item report writing.
 \end{itemize}
 
-This is what allows the system to move from a natural-language problem statement to executable scientific work.
+The managed environment layer is especially important in practice. PDEFlow can create run-local environments under the working directory, inspect their health, and execute commands inside them. This avoids relying on a pre-existing project \texttt{venv} and turns Python environment repair into part of the research workflow itself.
+
+This tool surface is what allows the system to move from a natural-language problem statement to executable scientific work.
 
 \section{Program Evolution}
 PDEFlow represents the transition from idea to evaluated implementation with a program-evolution chain:
@@ -259,19 +271,20 @@ The current repository provides a live, executable autonomous research scaffold 
 \begin{itemize}[leftmargin=1.5em]
   \item an OpenAI Agents SDK runtime,
   \item typed structured outputs,
-  \item a manager-centered orchestration loop,
-  \item autonomous acquisition and environment-setup tools,
+  \item a manager-centered orchestration loop with blocker-aware dynamic routing,
+  \item autonomous acquisition and managed-environment tools,
   \item a local memory and lineage store, and
   \item markdown reporting from structured state.
 \end{itemize}
 
-The main operational prerequisite for full live execution is that the environment provide a valid \texttt{OPENAI\_API\_KEY}. Optional variables such as \texttt{GITHUB\_TOKEN} can improve repository-search throughput.
+The main operational prerequisite for full live execution is that the environment provide a valid model API key, either \texttt{OPENAI\_API\_KEY} for direct OpenAI access or \texttt{OPENROUTER\_API\_KEY} for OpenRouter-backed execution. Optional variables such as \texttt{GITHUB\_TOKEN} can improve repository-search throughput.
 
 \section{Limitations}
 PDEFlow is a real autonomous systems scaffold, but several limitations remain:
 \begin{itemize}[leftmargin=1.5em]
   \item experiment quality depends on the underlying model and tool-use quality,
   \item metric parsing is currently generic rather than benchmark-specific,
+  \item recovery routing handles common hard blockers but is still heuristic rather than formally optimal,
   \item unrestricted acquisition and shell execution require a controlled operating environment,
   \item third-party repositories can be inconsistent or incomplete, and
   \item domain-specific scientific judgment is still partly limited by the generality of the base model.
@@ -286,7 +299,7 @@ The system is designed to support several natural extensions:
   \item richer PDE metric parsers and rollout diagnostics,
   \item checkpoint compatibility analysis,
   \item physics residual libraries for common PDE families,
-  \item stronger automated ablation planning,
+  \item stronger automated ablation planning and prerequisite verification,
   \item multi-branch program search over child candidates, and
   \item paper-ready report generation for scientific publication pipelines.
 \end{itemize}

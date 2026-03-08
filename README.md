@@ -56,7 +56,7 @@ uv run python app.py --config configs/research_problem.json --run-name pde_round
 OpenRouter example:
 
 ```bash
-uv run python app.py --config configs/research_problem.openrouter.json
+uv run python app.py --config configs/pde.openrouter.json
 ```
 
 ## What The User Provides
@@ -78,9 +78,9 @@ The system is designed to decide for itself:
 - which experiments to run
 - when to continue or stop
 
-## Workflow
+## How It Runs
 
-The manager runs these phases:
+The manager uses these phases:
 
 1. `literature_review`
 2. `acquisition`
@@ -96,6 +96,13 @@ The manager runs these phases:
 
 The design is manager-centered. Specialist agents do not freely chat with each other; they operate through shared state and tools.
 
+The phase vocabulary is fixed, but the cycle route is dynamic:
+
+- normal route: `hypothesis -> method_design -> coding -> experiment_planning -> experiment -> reflection`
+- recovery route: if the manager detects a hard blocker such as missing data, missing checkpoints, repo/bootstrap failure, or invalid environment state, it routes back through `acquisition -> experiment_planning -> experiment -> reflection`
+
+This prevents the system from continuing with useless downstream steps after a prerequisite has failed.
+
 ## Outputs
 
 Run artifacts are written under `execution.work_directory`:
@@ -108,6 +115,8 @@ Run artifacts are written under `execution.work_directory`:
 - `experiments/`: experiment records and logs
 - `reports/`: generated markdown reports
 - `workspaces/`: child program workspaces
+- `envs/`: managed Python environments created by the system
+- `pythons/`: managed Python interpreters downloaded by `uv` when needed
 
 Downloaded datasets, cloned repositories, checkpoints, and other acquired assets are stored under
 `<work_directory>/<workspace_root>/`.
@@ -138,6 +147,8 @@ Live progress is also written to `<work_directory>/process.txt` and printed to t
 - `runtime.provider=openai` requires `OPENAI_API_KEY`.
 - `runtime.provider=openrouter` requires `OPENROUTER_API_KEY`.
 - OpenRouter is wired through the OpenAI-compatible path in the Agents SDK and defaults to `chat_completions`.
+- Under OpenRouter, structured phase outputs use schema-guided JSON plus a repair fallback so a malformed model JSON response does not immediately crash the phase.
 - The current repository is live-only. There is no mock runtime.
+- The system can create and repair managed `uv` environments under the run work directory instead of relying on a pre-existing project `venv`.
 - The system uses real shell commands, downloads, repo cloning, and environment setup, so it should be run on a controlled research machine.
 - `execution.workspace_root` is enforced to live inside `execution.work_directory`.
