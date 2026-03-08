@@ -141,8 +141,3 @@ Live progress is also written to `<work_directory>/process.txt` and printed to t
 - The current repository is live-only. There is no mock runtime.
 - The system uses real shell commands, downloads, repo cloning, and environment setup, so it should be run on a controlled research machine.
 - `execution.workspace_root` is enforced to live inside `execution.work_directory`.
-
-## Paper Draft
-
-- [pdeflow_system.tex](docs/pdeflow_system.tex)
-- [references.bib](docs/references.bib)
