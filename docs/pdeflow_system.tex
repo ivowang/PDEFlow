@@ -26,7 +26,7 @@
 \maketitle
 
 \begin{abstract}
-We present \textbf{PDEFlow}, a manager-centered autonomous scientific research system designed for PDE neural operator research. The system takes a high-level research brief as input and then autonomously performs literature retrieval, external artifact acquisition, environment setup, baseline discovery, hypothesis generation, method design, code modification, experiment execution, reflection, and report generation. Unlike benchmark-specific tuning pipelines or multi-agent chat systems, PDEFlow is organized around an explicit research state machine, executable tool use, structured external memory, and a program-lineage database that records parent-child relationships between baseline and candidate implementations. The design targets open-ended scientific ML settings in which the system must decide what information, code, data, and compute resources are needed before proposing and testing new methods. A key systems property is dynamic blocker recovery: when execution reveals missing datasets, broken environments, or absent checkpoints, the manager routes the workflow back to acquisition and execution repair instead of blindly continuing downstream. Although the initial landing problem is PDE neural operator research grounded in benchmarks such as PDEBench \cite{takamoto2022pdebench} and method families such as FNO \cite{li2020fno} and DeepONet \cite{lu2021deeponet}, the architecture is general enough to support broader self-evolving scientific agent workflows.
+We present \textbf{PDEFlow}, a manager-centered autonomous scientific research system designed for PDE neural operator research. The system takes a high-level research brief as input and then autonomously performs literature retrieval, external artifact acquisition, environment setup, baseline discovery, hypothesis generation, method design, code modification, experiment planning, preflight validation, experiment execution, reflection, and report generation. Unlike benchmark-specific tuning pipelines or multi-agent chat systems, PDEFlow is organized around an explicit research state machine, executable tool use, structured external memory, and a program-lineage database that records parent-child relationships between baseline and candidate implementations. The design targets open-ended scientific ML settings in which the system must decide what information, code, data, and compute resources are needed before proposing and testing new methods. A key systems property is reliability-oriented blocker handling: datasets are validated before planning and launch, exact experiment plans are checked in a dedicated preflight phase, stalled transfers are bounded, and repeated infrastructure failures are converted into deterministic routing decisions instead of endless retry loops. Although the initial landing problem is PDE neural operator research grounded in benchmarks such as PDEBench \cite{takamoto2022pdebench} and method families such as FNO \cite{li2020fno} and DeepONet \cite{lu2021deeponet}, the architecture is general enough to support broader self-evolving scientific agent workflows.
 \end{abstract}
 
 \section{Introduction}
@@ -108,8 +108,8 @@ The manager is responsible for:
   \item initializing the run state,
   \item executing the front-end phases that establish context and execution readiness,
   \item selecting either a normal research route or a recovery route on each cycle,
-  \item iterating over hypothesis, design, coding, planning, experiment, and reflection phases when no hard blocker is present,
-  \item routing back through acquisition and execution repair when hard blockers are detected,
+  \item iterating over hypothesis, design, coding, planning, preflight, experiment, and reflection phases when no hard blocker is present,
+  \item routing back through acquisition and preflight-aware recovery when hard blockers are detected,
   \item deciding when to stop based on reflection state, and
   \item launching the reporting phase at the end of the run.
 \end{itemize}
@@ -127,6 +127,7 @@ The current implementation includes:
   \item MethodDesignAgent,
   \item CoderAgent,
   \item ExperimentPlannerAgent,
+  \item PreflightValidationAgent,
   \item ExperimentAgent,
   \item ReflectionAgent, and
   \item ReporterAgent.
@@ -145,6 +146,7 @@ The workflow is represented as an explicit state machine with a fixed phase voca
   \item \texttt{method\_design}
   \item \texttt{coding}
   \item \texttt{experiment\_planning}
+  \item \texttt{preflight\_validation}
   \item \texttt{experiment}
   \item \texttt{reflection}
   \item \texttt{reporting}
@@ -165,6 +167,7 @@ The workflow is represented as an explicit state machine with a fixed phase voca
 \texttt{method\_design} & Translate hypotheses into architectural, loss, data, training, or inference changes. \\
 \texttt{coding} & Create child workspaces, write files, patch code, and run validation checks. \\
 \texttt{experiment\_planning} & Construct concrete commands, working directories, stopping rules, and expected outputs. \\
+\texttt{preflight\_validation} & Validate the exact planned run, including artifact readiness, entrypoint sanity, config/path resolution, environment readiness, and output writability. \\
 \texttt{experiment} & Execute plans, collect logs, parse metrics, and record failures. \\
 \texttt{reflection} & Assess evidence, update lessons, and decide whether another cycle is warranted. \\
 \texttt{reporting} & Generate durable markdown reports from structured state. \\
@@ -176,11 +179,11 @@ The workflow is represented as an explicit state machine with a fixed phase voca
 
 The first four phases establish context and execution readiness. The final phase writes output artifacts. Between them, the manager chooses one of two cycle patterns:
 \begin{itemize}[leftmargin=1.5em]
-  \item a \emph{normal route} that runs hypothesis, method design, coding, experiment planning, experiment, and reflection; or
-  \item a \emph{recovery route} that runs acquisition, experiment planning, experiment, and reflection when recent evidence indicates a hard blocker such as missing data, absent checkpoints, or a broken environment.
+  \item a \emph{normal route} that runs hypothesis, method design, coding, experiment planning, preflight validation, experiment, and reflection; or
+  \item a \emph{recovery route} that runs acquisition, experiment planning, preflight validation, and reflection when recent evidence indicates a hard blocker such as corrupted data, absent checkpoints, stalled transfers, or a broken environment.
 \end{itemize}
 
-This distinction is operationally important. A setup-failed baseline is not treated as a completed baseline, and the manager does not permit repeated downstream method elaboration to substitute for missing experimental prerequisites.
+This distinction is operationally important. A setup-failed baseline is not treated as a completed baseline, exact artifact readiness is a hard gate, and the manager does not permit repeated downstream method elaboration to substitute for missing experimental prerequisites.
 
 \section{State And Memory}
 \subsection{Structured State}
@@ -189,13 +192,14 @@ The global research state stores:
   \item the research brief,
   \item the current phase and phase history,
   \item environment and secret status,
+  \item a persistent environment and run-state capability matrix,
   \item literature notes, taxonomy entries, and open questions,
-  \item artifact and repository registries,
+  \item artifact and repository registries with download, checksum, validation, and quarantine metadata,
   \item problem framing notes and candidate directions,
   \item hypotheses and method designs,
   \item program candidates and experiment plans,
-  \item experiment records and best-known results,
-  \item failure summaries and reflections, and
+  \item preflight reports, experiment records, and best-known results,
+  \item failure summaries, classified failures, and reflections, and
   \item generated reports and next actions.
 \end{itemize}
 
@@ -206,6 +210,7 @@ The memory layer stores:
   \item semantic memory for stable lessons and research insights,
   \item literature notes,
   \item artifact and repository registries,
+  \item capability matrices and preflight reports,
   \item idea memory,
   \item experiment plans and records, and
   \item generated reports.
@@ -222,15 +227,18 @@ The tool surface is a core part of the system. The current implementation suppor
   \item arXiv paper search,
   \item GitHub repository search,
   \item remote text fetching,
-  \item arbitrary file download,
+  \item bounded file download with resume, temporary partial files, and post-download validation,
+  \item checksum computation, artifact validation, and corrupted-file quarantine,
   \item PDF text extraction,
   \item repository cloning,
   \item directory-tree inspection,
   \item file reading and search,
   \item project manifest detection,
   \item managed environment creation and repair with \texttt{uv},
+  \item capability probing for runtime and blocker state,
   \item child-workspace creation,
   \item file writing and patch application,
+  \item exact-run preflight validation,
   \item shell command execution,
   \item JSON and metric parsing, and
   \item report writing.
@@ -239,6 +247,8 @@ The tool surface is a core part of the system. The current implementation suppor
 The managed environment layer is especially important in practice. PDEFlow can create run-local environments under the working directory, inspect their health, and execute commands inside them. This avoids relying on a pre-existing project \texttt{venv} and turns Python environment repair into part of the research workflow itself.
 
 Another practical systems requirement is command grounding. The implementation does not hardcode benchmark-specific path adapters. Instead, it performs a generic grounding pass that inspects planned launch commands, repository entry scripts, nearby configuration files, and verified local artifacts in order to infer missing path or root arguments before execution. This is designed to give the system a reusable ability to repair command/data mismatches across repositories rather than baking in one-off fixes for a single benchmark.
+
+The tool layer also enforces a stronger artifact-readiness discipline than earlier prototypes. For datasets, especially HDF5 files, validation is not reduced to path existence. The system records explicit download and validation states, verifies minimum file size, optionally checks official checksums, attempts real HDF5 opens and sample reads, and only marks an artifact \texttt{ready\_for\_training} if the required checks pass. Plans that depend on blocked artifacts are then filtered or blocked before launch.
 
 This tool surface is what allows the system to move from a natural-language problem statement to executable scientific work.
 
@@ -276,7 +286,10 @@ The current repository provides a live, executable autonomous research scaffold 
   \item an OpenAI Agents SDK runtime,
   \item typed structured outputs,
   \item a manager-centered orchestration loop with blocker-aware dynamic routing,
+  \item hard-gated artifact validation and quarantine,
+  \item an exact-run preflight validation phase before experiment launch,
   \item autonomous acquisition and managed-environment tools,
+  \item a persistent capability matrix and classified-failure memory,
   \item a local memory and lineage store, and
   \item markdown reporting from structured state.
 \end{itemize}
@@ -287,8 +300,8 @@ The main operational prerequisite for full live execution is that the environmen
 PDEFlow is a real autonomous systems scaffold, but several limitations remain:
 \begin{itemize}[leftmargin=1.5em]
   \item experiment quality depends on the underlying model and tool-use quality,
-  \item metric parsing is currently generic rather than benchmark-specific,
-  \item recovery routing handles common hard blockers but is still heuristic rather than formally optimal,
+  \item metric parsing and preflight checks are still mostly generic rather than repository-specialized,
+  \item recovery routing is deterministic and more conservative than earlier versions, but it is still heuristic rather than formally optimal,
   \item unrestricted acquisition and shell execution require a controlled operating environment,
   \item third-party repositories can be inconsistent or incomplete, and
   \item domain-specific scientific judgment is still partly limited by the generality of the base model.
@@ -299,11 +312,11 @@ These are not placeholders but realistic system-level constraints for autonomous
 \section{Future Work}
 The system is designed to support several natural extensions:
 \begin{itemize}[leftmargin=1.5em]
-  \item domain-specific dataset introspection for HDF5 and NetCDF scientific benchmarks,
-  \item richer PDE metric parsers and rollout diagnostics,
+  \item richer domain-specific dataset introspection for HDF5 and NetCDF scientific benchmarks,
+  \item richer PDE metric parsers, dataloader preflight checks, and rollout diagnostics,
   \item checkpoint compatibility analysis,
   \item physics residual libraries for common PDE families,
-  \item stronger automated ablation planning and prerequisite verification,
+  \item stronger automated ablation planning and fallback-route selection,
   \item multi-branch program search over child candidates, and
   \item paper-ready report generation for scientific publication pipelines.
 \end{itemize}

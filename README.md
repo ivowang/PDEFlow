@@ -2,7 +2,7 @@
 
 `PDEFlow` is a manager-centered autonomous research system for PDE neural operator research.
 
-You provide a research problem in config. The system then autonomously runs literature review, asset acquisition, method design, coding, experiments, reflection, and reporting with real tools.
+You provide a research problem in config. The system then autonomously runs literature review, asset acquisition, planning, preflight validation, experiments, reflection, and reporting with real tools.
 
 ## Quick Start
 
@@ -90,18 +90,24 @@ The manager uses these phases:
 6. `method_design`
 7. `coding`
 8. `experiment_planning`
-9. `experiment`
-10. `reflection`
-11. `reporting`
+9. `preflight_validation`
+10. `experiment`
+11. `reflection`
+12. `reporting`
 
 The design is manager-centered. Specialist agents do not freely chat with each other; they operate through shared state and tools.
 
 The phase vocabulary is fixed, but the cycle route is dynamic:
 
-- normal route: `hypothesis -> method_design -> coding -> experiment_planning -> experiment -> reflection`
-- recovery route: if the manager detects a hard blocker such as missing data, missing checkpoints, repo/bootstrap failure, or invalid environment state, it routes back through `acquisition -> experiment_planning -> experiment -> reflection`
+- normal route: `hypothesis -> method_design -> coding -> experiment_planning -> preflight_validation -> experiment -> reflection`
+- recovery route: if the manager detects a hard blocker such as corrupted data, blocked artifacts, failed transfers, missing checkpoints, repo/bootstrap failure, or invalid environment state, it routes back through `acquisition -> experiment_planning -> preflight_validation -> reflection`
 
 This prevents the system from continuing with useless downstream steps after a prerequisite has failed.
+
+Two reliability rules are now hard-gated:
+
+- dataset and checkpoint artifacts must be `ready_for_training` before planning or launch
+- real experiment launch only happens after `preflight_validation` passes for the exact plan
 
 ## Outputs
 
@@ -112,11 +118,14 @@ Run artifacts are written under `execution.work_directory`:
 - `memory/`: episodic, semantic, and idea memory
 - `literature/`: paper notes
 - `programs/`: program lineage database
+- `artifacts/`: artifact registry with validation/checksum metadata
+- `preflight/`: preflight reports for concrete experiment plans
 - `experiments/`: experiment records and logs
 - `reports/`: generated markdown reports
 - `workspaces/`: child program workspaces
 - `envs/`: managed Python environments created by the system
 - `pythons/`: managed Python interpreters downloaded by `uv` when needed
+- `quarantine/`: corrupted artifacts moved out of the training path
 
 Downloaded datasets, cloned repositories, checkpoints, and other acquired assets are stored under
 `<work_directory>/<workspace_root>/`.
@@ -149,7 +158,11 @@ Live progress is also written to `<work_directory>/process.txt` and printed to t
 - `runtime.provider=openrouter` requires `OPENROUTER_API_KEY`.
 - OpenRouter is wired through the OpenAI-compatible path in the Agents SDK and defaults to `chat_completions`.
 - Under OpenRouter, structured phase outputs use schema-guided JSON plus a repair fallback so a malformed model JSON response does not immediately crash the phase.
-- Experiment plans are grounded against verified local artifacts by inspecting repository entrypoints and configs; this is implemented as a generic capability, not a benchmark-specific adapter.
+- Experiment plans are grounded against `ready_for_training` local artifacts by inspecting repository entrypoints and configs; this is implemented as a generic capability, not a benchmark-specific adapter.
+- Artifact validation includes file existence, minimum-size checks, optional official checksum comparison, and HDF5 format validation. Corrupted files can be quarantined automatically.
+- Large downloads use `.part` files, bounded retry/resume behavior, and post-download validation instead of treating path existence as success.
+- The capability matrix and classified failure state are persisted in run state so repeated cycles do not rediscover the same blockers from scratch.
+- Acquisition/repair work, preflight checks, and real experiments are tracked separately so experiment history is not polluted by data-repair attempts.
 - The current repository is live-only. There is no mock runtime.
 - The system can create and repair managed `uv` environments under the run work directory instead of relying on a pre-existing project `venv`.
 - The system uses real shell commands, downloads, repo cloning, and environment setup, so it should be run on a controlled research machine.
