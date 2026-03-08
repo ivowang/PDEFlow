@@ -1,15 +1,21 @@
 from .base import BaseResearchAgent
-from .specialists import (
-    AcquisitionAgent,
-    CoderAgent,
+from .analysis import (
     DiagnosisAgent,
-    ExperimentAgent,
-    ExperimentPlannerAgent,
     HypothesisAgent,
-    LiteratureAgent,
     MethodDesignAgent,
     ProblemFramingAgent,
+)
+from .discovery import (
+    AcquisitionAgent,
+    LiteratureAgent,
+)
+from .execution import (
+    CoderAgent,
+    ExperimentAgent,
+    ExperimentPlannerAgent,
     ReflectionAgent,
+)
+from .reporting import (
     ReporterAgent,
 )
 

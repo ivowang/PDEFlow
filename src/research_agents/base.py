@@ -5,10 +5,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from ..runtime import RuntimeAdapter
-from ..state import DiaryEntry, ResearchPhase, ResearchState
-from ..tools import ResearchTools
-from ..common import now_utc, short_hash
+from runtime import RuntimeAdapter
+from state import DiaryEntry, ResearchPhase, ResearchState
+from tools import ResearchTools
+from common import now_utc, short_hash
 
 
 class BaseResearchAgent(ABC):

@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import shlex
 
-from ..state import ArtifactRecord, ExperimentPlan
+from state import ArtifactRecord, ExperimentPlan
 
 PATH_KEY_RE = re.compile(r"(?:^|\.)([A-Za-z0-9_]*(?:path|root|folder|dir))$")
 FILE_KEY_RE = re.compile(r"(?:^|\.)([A-Za-z0-9_]*(?:file|filename|dataset))$")

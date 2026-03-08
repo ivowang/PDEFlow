@@ -5,8 +5,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .config import SystemConfig
-from .orchestration import ResearchManager
+from config import SystemConfig
+from orchestration import ResearchManager
 
 
 def build_parser() -> argparse.ArgumentParser:

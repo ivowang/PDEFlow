@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pdeflow.integrations import ground_experiment_plan
-from pdeflow.state import ArtifactRecord, ExperimentPlan
+from integrations import ground_experiment_plan
+from state import ArtifactRecord, ExperimentPlan
 
 
 class CommandGroundingTests(unittest.TestCase):

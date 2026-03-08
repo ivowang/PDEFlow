@@ -17,10 +17,21 @@ dependencies = [
 ]
 
 [project.scripts]
-pdeflow = "pdeflow.app:main"
+pdeflow = "cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pdeflow"]
+packages = [
+  "src/cli",
+  "src/common",
+  "src/config",
+  "src/integrations",
+  "src/memory",
+  "src/orchestration",
+  "src/research_agents",
+  "src/runtime",
+  "src/state",
+  "src/tools",
+]
 
 [tool.uv]
 package = true

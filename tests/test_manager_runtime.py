@@ -6,13 +6,13 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from pdeflow.agents import ExperimentAgent
-from pdeflow.config import ResearchBriefConfig, RuntimeConfig, SystemConfig
-from pdeflow.memory import ResearchMemory
-from pdeflow.orchestration import ResearchManager
-from pdeflow.runtime import RuntimeAdapter
-from pdeflow.state import ExperimentPhaseOutput, ExperimentPlan, ExperimentRecord, ResearchState
-from pdeflow.tools import ResearchTools
+from research_agents import ExperimentAgent
+from config import ResearchBriefConfig, RuntimeConfig, SystemConfig
+from memory import ResearchMemory
+from orchestration import ResearchManager
+from runtime import RuntimeAdapter
+from state import ExperimentPhaseOutput, ExperimentPlan, ExperimentRecord, ResearchState
+from tools import ResearchTools
 
 
 def make_config(run_name: str = "test-run") -> SystemConfig:

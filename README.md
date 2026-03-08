@@ -134,14 +134,14 @@ Live progress is also written to `<work_directory>/process.txt` and printed to t
 
 ## Package Layout
 
-- [config/](src/pdeflow/config): runtime and execution config schema
-- [state/](src/pdeflow/state): research state and phase output models
-- [tools/](src/pdeflow/tools): executable tool surface
-- [agents/](src/pdeflow/agents): base agent class and specialist agents
-- [orchestration/](src/pdeflow/orchestration): manager loop and cycle routing
-- [memory/](src/pdeflow/memory): JSONL and SQLite-backed memory
-- [runtime/](src/pdeflow/runtime): OpenAI Agents SDK runtime adapter
-- [integrations/](src/pdeflow/integrations): generic repository/runtime integration helpers
+- [config/](src/config): runtime and execution config schema
+- [state/](src/state): entities, global research state, and phase output models
+- [tools/](src/tools): executable tool surface, split into inspection, retrieval, workspace, Python runtime discovery, managed environments, execution, and reporting modules
+- [research_agents/](src/research_agents): base agent class plus discovery, analysis, execution, and reporting specialists
+- [orchestration/](src/orchestration): manager loop and cycle routing
+- [memory/](src/memory): JSONL and SQLite-backed memory
+- [runtime/](src/runtime): provider resolution, structured-output handling, and OpenAI Agents SDK adapter
+- [integrations/](src/integrations): generic repository/runtime integration helpers
 
 ## Notes
 

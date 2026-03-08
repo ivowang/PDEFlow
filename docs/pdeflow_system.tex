@@ -89,7 +89,7 @@ At the highest level, PDEFlow consists of five components:
   \item a local memory layer backed by JSONL and SQLite.
 \end{enumerate}
 
-In the implementation, these concerns are separated into dedicated Python packages for configuration, state schemas, runtime, tools, agents, orchestration, memory, and repository/runtime integrations. This package-level decomposition is intended to keep the system extensible as new domains, tools, and specialist roles are added.
+In the implementation, these concerns are separated into dedicated Python packages for configuration, state schemas, runtime, tools, agents, orchestration, memory, and repository/runtime integrations. Within those packages, large components are further decomposed by responsibility: for example, the tool layer is split into inspection, retrieval, workspace, environment, execution, and reporting modules, while the agent layer is split into discovery, analysis, execution, and reporting specialists. This package-level decomposition is intended to keep the system extensible as new domains, tools, and specialist roles are added.
 
 \subsection{Runtime Layer}
 The runtime is built on the OpenAI Agents SDK \cite{openai_agents_sdk}. Each specialist agent is instantiated with:

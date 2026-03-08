@@ -1,32 +1,33 @@
-from .models import (
-    AcquisitionPhaseOutput,
+from .core import ResearchPhase, ResearchState
+from .entities import (
     ArtifactRecord,
     CandidateDirection,
-    CodingPhaseOutput,
-    DiagnosisPhaseOutput,
     DiaryEntry,
     EnvironmentSnapshot,
-    ExperimentPhaseOutput,
     ExperimentPlan,
-    ExperimentPlanningPhaseOutput,
     ExperimentRecord,
     GeneratedReport,
-    HypothesisPhaseOutput,
     HypothesisRecord,
-    LiteraturePhaseOutput,
     MethodDesign,
-    MethodDesignPhaseOutput,
     PaperNote,
-    ProblemFramingPhaseOutput,
     ProgramCandidate,
-    ReflectionPhaseOutput,
     ReflectionRecord,
-    ReportingPhaseOutput,
     RepositoryRecord,
-    ResearchPhase,
-    ResearchState,
     SecretStatus,
     TaxonomyEntry,
+)
+from .outputs import (
+    AcquisitionPhaseOutput,
+    CodingPhaseOutput,
+    DiagnosisPhaseOutput,
+    ExperimentPhaseOutput,
+    ExperimentPlanningPhaseOutput,
+    HypothesisPhaseOutput,
+    LiteraturePhaseOutput,
+    MethodDesignPhaseOutput,
+    ProblemFramingPhaseOutput,
+    ReflectionPhaseOutput,
+    ReportingPhaseOutput,
 )
 
 __all__ = [
