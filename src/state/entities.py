@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -52,6 +53,63 @@ class EnvironmentSnapshot(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class ArtifactStatus(str, Enum):
+    DOWNLOADED = "downloaded"
+    CHECKSUM_VERIFIED = "checksum_verified"
+    FORMAT_VERIFIED = "format_verified"
+    READY_FOR_TRAINING = "ready_for_training"
+    CORRUPTED = "corrupted"
+    QUARANTINED = "quarantined"
+    VERIFIED_LOCAL = "verified_local"
+    VERIFIED_REMOTE = "verified_remote"
+    DOWNLOAD_FAILED = "download_failed"
+    BLOCKED = "blocked"
+
+
+class ArtifactChecksumRecord(BaseModel):
+    algorithm: str = "md5"
+    expected: str | None = None
+    actual: str | None = None
+    source: str | None = None
+    matched: bool | None = None
+    checked_at: str = Field(default_factory=now_utc)
+
+
+class ArtifactValidationResult(BaseModel):
+    validator: str
+    status: ArtifactStatus
+    exists: bool
+    size_bytes: int = 0
+    min_size_bytes: int | None = None
+    size_ok: bool = False
+    format_valid: bool | None = None
+    ready_for_training: bool = False
+    top_level_keys: list[str] = Field(default_factory=list)
+    sample_read_target: str | None = None
+    sample_shape: list[int] = Field(default_factory=list)
+    checksum: ArtifactChecksumRecord | None = None
+    failure_reasons: list[str] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+    validated_at: str = Field(default_factory=now_utc)
+
+
+class ArtifactDownloadMetadata(BaseModel):
+    source_url: str | None = None
+    local_path: str | None = None
+    download_timestamp: str = Field(default_factory=now_utc)
+    file_size: int = 0
+    checksum: ArtifactChecksumRecord | None = None
+    validation_status: str | None = None
+    transfer_method: str | None = None
+    attempt_count: int = 0
+    bytes_downloaded: int = 0
+    elapsed_time: float = 0.0
+    average_throughput: float | None = None
+    failure_type: str | None = None
+    failure_message: str | None = None
+    resumed: bool = False
+
+
 class ArtifactRecord(BaseModel):
     artifact_id: str
     artifact_type: str
@@ -61,6 +119,9 @@ class ArtifactRecord(BaseModel):
     source_url: str | None = None
     local_path: str | None = None
     status: str
+    validation: ArtifactValidationResult | None = None
+    download_metadata: ArtifactDownloadMetadata | None = None
+    quarantine_path: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
 
@@ -71,6 +132,7 @@ class RepositoryRecord(BaseModel):
     remote_url: str
     local_path: str
     bootstrap_status: str = "uninitialized"
+    environment_path: str | None = None
     detected_manifests: list[str] = Field(default_factory=list)
     entrypoints: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
@@ -136,11 +198,15 @@ class ExperimentPlan(BaseModel):
     title: str
     program_id: str
     repo_id: str | None = None
+    job_kind: str = "experiment"
     working_directory: str
     setup_commands: list[str] = Field(default_factory=list)
     launch_command: str
     environment: dict[str, str] = Field(default_factory=dict)
     gpu_ids: list[int] = Field(default_factory=list)
+    required_artifact_ids: list[str] = Field(default_factory=list)
+    preflight_required: bool = True
+    preflight_status: str | None = None
     expected_outputs: list[str] = Field(default_factory=list)
     success_criteria: list[str] = Field(default_factory=list)
     stopping_rules: list[str] = Field(default_factory=list)
@@ -154,6 +220,7 @@ class ExperimentRecord(BaseModel):
     experiment_id: str
     plan_id: str
     program_id: str
+    job_kind: str = "experiment"
     command: str
     working_directory: str
     status: str
@@ -161,10 +228,78 @@ class ExperimentRecord(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
     observations: list[str] = Field(default_factory=list)
     failure_modes: list[str] = Field(default_factory=list)
+    failure_ids: list[str] = Field(default_factory=list)
     log_path: str
     result_paths: list[str] = Field(default_factory=list)
     started_at: str = Field(default_factory=now_utc)
     finished_at: str | None = None
+
+
+class PreflightCheckResult(BaseModel):
+    name: str
+    passed: bool
+    details: str = ""
+    category: str = ""
+
+
+class PreflightReport(BaseModel):
+    report_id: str
+    plan_id: str
+    program_id: str
+    job_kind: str = "preflight"
+    passed: bool
+    failed_checks: list[PreflightCheckResult] = Field(default_factory=list)
+    blocking_reason: str | None = None
+    recommended_route: str | None = None
+    related_artifact_ids: list[str] = Field(default_factory=list)
+    log_path: str | None = None
+    created_at: str = Field(default_factory=now_utc)
+
+
+class FailureSeverity(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class ClassifiedFailure(BaseModel):
+    failure_id: str
+    failure_type: str
+    severity: FailureSeverity
+    blocking: bool
+    allow_experiment_launch: bool
+    source_phase: str
+    source_id: str | None = None
+    summary: str
+    remediation_steps: list[str] = Field(default_factory=list)
+    fallback_strategy: str | None = None
+    detected_from: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=now_utc)
+
+
+class CapabilityMatrix(BaseModel):
+    environment_path: str | None = None
+    python_available: bool = False
+    pip_available: bool = False
+    torch_available: bool = False
+    cuda_available: bool = False
+    h5py_available: bool = False
+    hydra_available: bool = False
+    pdebench_trainable: bool = False
+    deepxde_installed: bool = False
+    deepxde_backend: str | None = None
+    tensorflow_available: bool = False
+    pinn_ready: bool = False
+    fno_ready: bool = False
+    unet_ready: bool = False
+    target_dataset_ready: bool = False
+    target_dataset_blocked: bool = False
+    exact_target_shards_missing: list[str] = Field(default_factory=list)
+    exact_target_shards_corrupted: list[str] = Field(default_factory=list)
+    fallback_assets_available: bool = False
+    baseline_ready_to_launch: bool = False
+    generated_at: str = Field(default_factory=now_utc)
 
 
 class ReflectionRecord(BaseModel):
@@ -173,6 +308,7 @@ class ReflectionRecord(BaseModel):
     hypothesis_id: str | None = None
     verdict: str
     evidence: list[str] = Field(default_factory=list)
+    linked_failure_ids: list[str] = Field(default_factory=list)
     accepted_lessons: list[str] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
     continue_research: bool = False

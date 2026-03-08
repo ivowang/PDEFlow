@@ -60,6 +60,8 @@ You must:
 - identify at least one viable baseline program candidate grounded in acquired assets
 - when recent experiment or setup failures expose a concrete missing prerequisite, prioritize fixing that blocker before collecting optional new assets
 - verify that downloaded datasets, checkpoints, and repositories exist at the exact local paths needed by upcoming experiment plans
+- use the managed downloader and artifact validator instead of ad hoc `curl` or `wget` repair loops
+- for dataset artifacts, persist official checksum metadata when available and do not treat path existence as validation
 
 Rules:
 - Do not assume repository URLs, dataset locations, or checkpoint links unless a tool confirmed them.
@@ -81,6 +83,9 @@ Rules:
 
     def apply_output(self, state: ResearchState, tools: ResearchTools, output: AcquisitionPhaseOutput) -> str:
         state.environment_snapshot = output.environment_snapshot
+        if output.capability_matrix is not None:
+            state.capability_matrix = output.capability_matrix
+            tools.memory.record_capability_matrix(output.capability_matrix)
         state.secret_status = upsert_by_attr(state.secret_status, output.secret_status, "env_var")
         state.external_artifacts = upsert_by_attr(state.external_artifacts, output.external_artifacts, "artifact_id")
         state.repositories = upsert_by_attr(state.repositories, output.repositories, "repo_id")

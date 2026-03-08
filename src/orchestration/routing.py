@@ -38,46 +38,46 @@ class ManagerRoutingMixin:
         return bool(state.method_designs)
 
     def _select_cycle_route(self, state: ResearchState) -> CycleRoute:
-        failure_text = self._recent_failure_text(state)
-        missing_markers = (
-            "missing",
-            "absent",
-            "not found",
-            "does not exist",
-            "failed before launch",
-            "setup_failed",
-            "blocked",
-        )
-        acquisition_markers = (
-            "dataset",
-            "hdf5",
-            "checkpoint",
-            "weights",
-            "download",
-            "repository",
-            "clone",
-            "artifact",
-            "no module named",
-            "ensurepip",
-            "pip",
-            "venv",
-            "dependency",
-            "environment",
-        )
-        if failure_text and self._contains_any(failure_text, missing_markers) and self._contains_any(
-            failure_text, acquisition_markers
+        failure_types = {failure.failure_type for failure in state.classified_failures if failure.blocking}
+        capability = state.capability_matrix
+        if capability and capability.target_dataset_blocked and not capability.fallback_assets_available and (
+            "repeated_repair_failure" in failure_types or "checksum_mismatch" in failure_types
+        ):
+            state.blocked_reason = (
+                "Exact target artifacts are blocked and no validated fallback route is currently executable."
+            )
+            state.termination_decision = state.blocked_reason
+            return CycleRoute(
+                phases=(PhaseSpec(ResearchPhase.REFLECTION, "reflection", ("reflections", "next_actions")),),
+                reason=state.blocked_reason,
+            )
+        if "plan_depends_on_blocked_artifact" in failure_types:
+            return CycleRoute(
+                phases=(
+                    PhaseSpec(ResearchPhase.ACQUISITION, "acquisition", ("environment_snapshot", "external_artifacts", "repositories")),
+                    PhaseSpec(ResearchPhase.EXPERIMENT_PLANNING, "planner", ("experiment_plans",)),
+                    PhaseSpec(ResearchPhase.PREFLIGHT_VALIDATION, "preflight", ("preflight_reports", "capability_matrix")),
+                    PhaseSpec(ResearchPhase.REFLECTION, "reflection", ("reflections", "next_actions")),
+                ),
+                reason=(
+                    "Recent plans depend on blocked artifacts. Reacquire or reroute before any launch."
+                ),
+            )
+        if capability and not capability.baseline_ready_to_launch and (
+            capability.target_dataset_blocked or "transfer_stalled" in failure_types or "transfer_timeout" in failure_types
         ):
             return CycleRoute(
                 phases=tuple(self.recovery_phases),
                 reason=(
-                    "Hard external blocker detected from recent failures. "
-                    "Route back through acquisition and execution recovery before further hypothesis or coding work."
+                    "Capability matrix shows the baseline route is not launch-ready due to infrastructure blockers. "
+                    "Route through acquisition, planning, and preflight recovery before further research work."
                 ),
             )
         if self._latest_program_requires_coding(state):
             coding_route = (
                 PhaseSpec(ResearchPhase.CODING, "coder", ("program_candidates",)),
                 PhaseSpec(ResearchPhase.EXPERIMENT_PLANNING, "planner", ("experiment_plans",)),
+                PhaseSpec(ResearchPhase.PREFLIGHT_VALIDATION, "preflight", ("preflight_reports", "capability_matrix")),
                 PhaseSpec(ResearchPhase.EXPERIMENT, "experiment", ("experiment_records", "best_known_results")),
                 PhaseSpec(ResearchPhase.REFLECTION, "reflection", ("reflections", "next_actions")),
             )

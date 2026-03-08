@@ -38,7 +38,7 @@ class CommandGroundingTests(unittest.TestCase):
                 title="Burgers train shard",
                 rationale="verified test artifact",
                 local_path=str(dataset_path),
-                status="verified",
+                status="ready_for_training",
                 metadata={"size_bytes": dataset_path.stat().st_size},
             )
             plan = ExperimentPlan(
@@ -88,7 +88,7 @@ class CommandGroundingTests(unittest.TestCase):
                 title="ReactionDiffusion shard",
                 rationale="incomplete test artifact",
                 local_path=str(dataset_path),
-                status="partial",
+                status="corrupted",
                 metadata={"expected_size_bytes": 1024},
             )
             plan = ExperimentPlan(
@@ -103,9 +103,9 @@ class CommandGroundingTests(unittest.TestCase):
 
             grounded_plan, messages = ground_experiment_plan(plan, [artifact])
 
-            self.assertEqual(plan.launch_command, grounded_plan.launch_command)
-            self.assertEqual(plan.setup_commands, grounded_plan.setup_commands)
-            self.assertFalse(messages)
+            self.assertEqual("blocked", grounded_plan.status)
+            self.assertIn("dataset-reacdiff", grounded_plan.required_artifact_ids)
+            self.assertTrue(messages)
 
 
 if __name__ == "__main__":

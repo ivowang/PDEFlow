@@ -13,6 +13,7 @@ from .execution import (
     CoderAgent,
     ExperimentAgent,
     ExperimentPlannerAgent,
+    PreflightValidationAgent,
     ReflectionAgent,
 )
 from .reporting import (
@@ -29,6 +30,7 @@ __all__ = [
     "HypothesisAgent",
     "LiteratureAgent",
     "MethodDesignAgent",
+    "PreflightValidationAgent",
     "ProblemFramingAgent",
     "ReflectionAgent",
     "ReporterAgent",

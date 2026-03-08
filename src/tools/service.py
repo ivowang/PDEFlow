@@ -6,10 +6,14 @@ from typing import Any
 from common import load_openai_agents_sdk
 from config import SystemConfig
 from memory import ResearchMemory
+from state import ArtifactRecord, ExperimentPlan
+from .artifacts import ArtifactValidationMixin
 from .base import ToolContext
+from .capabilities import CapabilityProbeMixin
 from .environment import ManagedEnvironmentMixin
 from .execution import CommandExecutionMixin
 from .inspection import SystemInspectionMixin
+from .preflight import PreflightValidationMixin
 from .python_runtime import PythonRuntimeDiscoveryMixin
 from .reporting import ReportingToolsMixin
 from .retrieval import RetrievalToolsMixin
@@ -24,10 +28,13 @@ except ImportError:  # pragma: no cover
 class ResearchTools(
     ToolContext,
     SystemInspectionMixin,
+    ArtifactValidationMixin,
     RetrievalToolsMixin,
     WorkspaceToolsMixin,
     PythonRuntimeDiscoveryMixin,
     ManagedEnvironmentMixin,
+    CapabilityProbeMixin,
+    PreflightValidationMixin,
     CommandExecutionMixin,
     ReportingToolsMixin,
 ):
@@ -66,9 +73,44 @@ class ResearchTools(
             return self.fetch_url_text(url, max_chars=max_chars)
 
         @function_tool
-        def download_file(url: str, target_path: str) -> dict[str, Any]:
+        def download_file(
+            url: str,
+            target_path: str,
+            artifact_id: str | None = None,
+            artifact_type: str = "dataset",
+            expected_checksum: str | None = None,
+            checksum_algorithm: str = "md5",
+            min_size_bytes: int | None = None,
+            required_keys: list[str] | None = None,
+        ) -> dict[str, Any]:
             """Download a remote file into the managed workspace."""
-            return self.download_file(url, target_path=target_path)
+            return self.download_file(
+                url,
+                target_path=target_path,
+                artifact_id=artifact_id,
+                artifact_type=artifact_type,
+                expected_checksum=expected_checksum,
+                checksum_algorithm=checksum_algorithm,
+                min_size_bytes=min_size_bytes,
+                required_keys=required_keys,
+            )
+
+        @function_tool
+        def compute_file_checksum(path: str, algorithm: str = "md5") -> dict[str, Any]:
+            """Compute a checksum for a local file inside the managed workspace."""
+            return self.compute_file_checksum(path, algorithm=algorithm)
+
+        @function_tool
+        def validate_artifact(
+            artifact_json: str,
+            quarantine_on_failure: bool = True,
+        ) -> dict[str, Any]:
+            """Validate a local artifact and return a structured readiness result."""
+            artifact = ArtifactRecord.model_validate_json(artifact_json)
+            return self.validate_artifact_record(
+                artifact,
+                quarantine_on_failure=quarantine_on_failure,
+            ).model_dump(mode="python")
 
         @function_tool
         def extract_pdf_text(pdf_path: str, max_pages: int = 6) -> dict[str, Any]:
@@ -133,6 +175,20 @@ class ResearchTools(
             return self.inspect_python_environment(environment_path, modules=modules)
 
         @function_tool
+        def probe_capability_matrix(
+            artifact_payload_json: str = "[]",
+            repository_paths: list[str] | None = None,
+            environment_path: str | None = None,
+        ) -> dict[str, Any]:
+            """Probe the current environment and run-state capability matrix."""
+            artifacts = [ArtifactRecord.model_validate(item) for item in json.loads(artifact_payload_json)]
+            return self.probe_capability_matrix(
+                artifacts=artifacts,
+                repository_paths=repository_paths,
+                environment_path=environment_path,
+            ).model_dump(mode="python")
+
+        @function_tool
         def copy_tree(source_path: str, destination_path: str) -> dict[str, Any]:
             """Copy a repository or workspace tree to create a child program candidate."""
             return self.copy_tree(source_path, destination_path)
@@ -164,6 +220,8 @@ class ResearchTools(
             gpu_ids: list[int] | None = None,
             log_path: str | None = None,
             allow_failure: bool = True,
+            job_kind: str = "command",
+            stall_timeout_seconds: int | None = None,
         ) -> dict[str, Any]:
             """Run a shell command in a managed directory and capture a persistent log."""
             return self.run_command(
@@ -172,6 +230,8 @@ class ResearchTools(
                 gpu_ids=gpu_ids,
                 log_path=log_path,
                 allow_failure=allow_failure,
+                job_kind=job_kind,
+                stall_timeout_seconds=stall_timeout_seconds,
             )
 
         @function_tool
@@ -182,6 +242,8 @@ class ResearchTools(
             gpu_ids: list[int] | None = None,
             log_path: str | None = None,
             allow_failure: bool = True,
+            job_kind: str = "environment_command",
+            stall_timeout_seconds: int | None = None,
         ) -> dict[str, Any]:
             """Run a command inside a managed Python environment created by the research system."""
             return self.run_in_environment(
@@ -191,7 +253,16 @@ class ResearchTools(
                 gpu_ids=gpu_ids,
                 log_path=log_path,
                 allow_failure=allow_failure,
+                job_kind=job_kind,
+                stall_timeout_seconds=stall_timeout_seconds,
             )
+
+        @function_tool
+        def preflight_experiment_plan(plan_json: str, artifact_payload_json: str = "[]") -> dict[str, Any]:
+            """Run deterministic preflight validation against an exact experiment plan."""
+            plan = ExperimentPlan.model_validate_json(plan_json)
+            artifacts = [ArtifactRecord.model_validate(item) for item in json.loads(artifact_payload_json)]
+            return self.preflight_experiment_plan(plan, artifacts).model_dump(mode="python")
 
         @function_tool
         def parse_json_file(path: str) -> dict[str, Any]:
@@ -215,6 +286,8 @@ class ResearchTools(
             search_github_repositories,
             fetch_url_text,
             download_file,
+            compute_file_checksum,
+            validate_artifact,
             extract_pdf_text,
             clone_repository,
             inspect_directory_tree,
@@ -225,6 +298,7 @@ class ResearchTools(
             bootstrap_python_environment,
             ensure_python_environment,
             inspect_python_environment,
+            probe_capability_matrix,
             copy_tree,
             write_text_file,
             write_json_file,
@@ -232,6 +306,7 @@ class ResearchTools(
             apply_patch_file,
             run_command,
             run_in_environment,
+            preflight_experiment_plan,
             parse_json_file,
             parse_metrics_file,
             write_report,

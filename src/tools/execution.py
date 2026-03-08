@@ -21,6 +21,8 @@ class CommandExecutionMixin:
         log_path: str | None = None,
         allow_failure: bool = False,
         emit_progress: bool = True,
+        job_kind: str = "command",
+        stall_timeout_seconds: int | None = None,
     ) -> dict[str, object]:
         if not self.config.execution.allow_shell_commands:
             raise RuntimeError("Shell command execution is disabled in the current config.")
@@ -40,7 +42,7 @@ class CommandExecutionMixin:
         if emit_progress:
             gpu_text = f" on GPUs {gpu_ids}" if gpu_ids else ""
             self.memory.record_process(
-                f"Running command{gpu_text} in {working_directory}: {compact}"
+                f"Running {job_kind}{gpu_text} in {working_directory}: {compact}"
             )
         popen_args = ["bash", "-lc", command] if self._command_requires_shell(command) else shlex.split(command)
         process = subprocess.Popen(
@@ -54,15 +56,27 @@ class CommandExecutionMixin:
         tail_lines: deque[str] = deque(maxlen=200)
         heartbeat_stop = threading.Event()
         started_at = time.monotonic()
+        last_progress_at = started_at
+        last_log_size = 0
 
         def emit_heartbeat() -> None:
             interval_seconds = 60
+            nonlocal last_progress_at, last_log_size
             while not heartbeat_stop.wait(interval_seconds):
                 if process.poll() is not None:
                     return
                 elapsed = int(time.monotonic() - started_at)
                 last_line = tail_lines[-1].strip() if tail_lines else ""
                 log_size = log_file.stat().st_size if log_file.exists() else 0
+                if log_size > last_log_size:
+                    last_progress_at = time.monotonic()
+                    last_log_size = log_size
+                if stall_timeout_seconds is not None and time.monotonic() - last_progress_at >= stall_timeout_seconds:
+                    process.terminate()
+                    self.memory.record_process(
+                        f"Command stalled and was terminated after {stall_timeout_seconds}s without log progress: {compact}"
+                    )
+                    return
                 suffix = f" last_output={last_line[:160]}" if last_line else ""
                 self.memory.record_process(
                     "Command heartbeat: "
@@ -83,6 +97,8 @@ class CommandExecutionMixin:
                 handle.write(line)
                 handle.flush()
                 tail_lines.append(line.rstrip("\n"))
+                last_progress_at = time.monotonic()
+            process.stdout.close()
         return_code = process.wait()
         heartbeat_stop.set()
         if heartbeat_thread is not None:
@@ -96,6 +112,7 @@ class CommandExecutionMixin:
             "stderr_tail": "" if return_code == 0 else stdout_tail,
             "log_path": str(log_file),
             "emit_progress": emit_progress,
+            "job_kind": job_kind,
         }
         self._record_tool_event("run_command", result)
         if return_code != 0 and not allow_failure:

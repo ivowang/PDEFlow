@@ -59,44 +59,20 @@ def _set_assignment(tokens: list[str], key: str, value: str) -> list[str]:
 
 
 def _artifact_is_complete(artifact: ArtifactRecord) -> bool:
-    if not artifact.local_path:
-        return False
-    path = Path(artifact.local_path)
-    if not path.exists() or not path.is_file():
-        return False
-    status = artifact.status.lower()
-    if any(marker in status for marker in ("partial", "corrupt", "failed", "blocked")):
-        return False
-    metadata = artifact.metadata or {}
-    expected_size = metadata.get("expected_size_bytes")
-    if expected_size is not None:
-        try:
-            if path.stat().st_size < int(expected_size):
-                return False
-        except (TypeError, ValueError):
-            return False
-    known_size = metadata.get("size_bytes")
-    if known_size is not None:
-        try:
-            if path.stat().st_size < int(known_size):
-                return False
-        except (TypeError, ValueError):
-            return False
-    return True
+    return artifact.status == "ready_for_training"
 
 
-def _resolve_dataset_artifact(assignments: dict[str, str], artifacts: list[ArtifactRecord]) -> Path | None:
+def _matching_dataset_artifacts(assignments: dict[str, str], artifacts: list[ArtifactRecord]) -> list[ArtifactRecord]:
     candidate_names = [
         Path(value.strip("'\"")).name
         for key, value in assignments.items()
         if _is_file_key(key) and _is_data_filename(value)
     ]
-    for artifact in artifacts:
-        if not _artifact_is_complete(artifact):
-            continue
-        if artifact.local_path and Path(artifact.local_path).name in candidate_names:
-            return Path(artifact.local_path)
-    return None
+    return [
+        artifact
+        for artifact in artifacts
+        if artifact.local_path and Path(artifact.local_path).name in candidate_names
+    ]
 
 
 def _resolve_script_path(tokens: list[str], working_directory: Path) -> Path | None:
@@ -180,14 +156,43 @@ def ground_experiment_plan(
     if not tokens:
         return plan, [f"{plan.plan_id}: unable to parse launch command for grounding."]
     assignments = _command_assignments(tokens)
-    dataset_path = _resolve_dataset_artifact(assignments, artifacts)
-    if dataset_path is None:
+    matching_artifacts = _matching_dataset_artifacts(assignments, artifacts)
+    ready_artifact = next((item for item in matching_artifacts if _artifact_is_complete(item)), None)
+    if ready_artifact is None:
+        if matching_artifacts:
+            blocked_ids = [item.artifact_id for item in matching_artifacts]
+            notes = list(plan.notes)
+            note = (
+                "Plan depends on dataset artifacts that are not ready_for_training: "
+                + ", ".join(blocked_ids)
+            )
+            if note not in notes:
+                notes.append(note)
+            blocked_plan = plan.model_copy(
+                update={
+                    "status": "blocked",
+                    "required_artifact_ids": sorted(set([*plan.required_artifact_ids, *blocked_ids])),
+                    "preflight_status": "blocked_artifact_dependency",
+                    "notes": notes,
+                }
+            )
+            return blocked_plan, [
+                f"{plan.plan_id}: blocked because required dataset artifacts are not ready_for_training: {', '.join(blocked_ids)}."
+            ]
         return plan, []
+    dataset_path = Path(ready_artifact.local_path)
 
     working_directory = Path(plan.working_directory)
     script_path = _resolve_script_path(tokens, working_directory)
     if script_path is None:
-        return plan, []
+        return (
+            plan.model_copy(
+                update={
+                    "required_artifact_ids": sorted(set([*plan.required_artifact_ids, ready_artifact.artifact_id])),
+                }
+            ),
+            [],
+        )
 
     config_roots = _discover_config_roots(working_directory)
     path_keys = _discover_path_keys(script_path, config_roots)
@@ -216,7 +221,14 @@ def ground_experiment_plan(
             )
 
     if not grounded_messages:
-        return plan, []
+        return (
+            plan.model_copy(
+                update={
+                    "required_artifact_ids": sorted(set([*plan.required_artifact_ids, ready_artifact.artifact_id])),
+                }
+            ),
+            [],
+        )
 
     grounded_setup = _replace_dataset_prechecks(plan.setup_commands, dataset_path)
     grounded_launch = shlex.join(grounded_tokens)
@@ -232,6 +244,7 @@ def ground_experiment_plan(
             update={
                 "launch_command": grounded_launch,
                 "setup_commands": grounded_setup,
+                "required_artifact_ids": sorted(set([*plan.required_artifact_ids, ready_artifact.artifact_id])),
                 "notes": notes,
             }
         ),

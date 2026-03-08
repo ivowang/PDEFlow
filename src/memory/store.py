@@ -7,11 +7,14 @@ from typing import Any
 
 from state import (
     ArtifactRecord,
+    CapabilityMatrix,
+    ClassifiedFailure,
     DiaryEntry,
     ExperimentPlan,
     ExperimentRecord,
     GeneratedReport,
     PaperNote,
+    PreflightReport,
     ProgramCandidate,
     RepositoryRecord,
     ResearchPhase,
@@ -34,6 +37,7 @@ class ResearchMemory:
         self.reports_dir = ensure_dir(root / "reports")
         self.programs_dir = ensure_dir(root / "programs")
         self.experiments_dir = ensure_dir(root / "experiments")
+        self.preflight_dir = ensure_dir(root / "preflight")
         self.diary_dir = ensure_dir(root / "diary")
         self.repositories_dir = ensure_dir(root / "repositories")
         self.artifacts_dir = ensure_dir(root / "artifacts")
@@ -103,11 +107,17 @@ class ResearchMemory:
     def record_artifact(self, artifact: ArtifactRecord) -> None:
         append_jsonl(self.artifacts_dir / "artifact_registry.jsonl", artifact)
 
+    def record_capability_matrix(self, capability_matrix: CapabilityMatrix) -> None:
+        append_jsonl(self.state_dir / "capability_matrix.jsonl", capability_matrix)
+
     def record_repository(self, repository: RepositoryRecord) -> None:
         append_jsonl(self.repositories_dir / "repository_registry.jsonl", repository)
 
     def record_experiment_plan(self, plan: ExperimentPlan) -> None:
         append_jsonl(self.memory_dir / "experiment_plans.jsonl", plan)
+
+    def record_preflight_report(self, report: PreflightReport) -> None:
+        append_jsonl(self.preflight_dir / "preflight_reports.jsonl", report)
 
     def record_diary(self, entry: DiaryEntry) -> None:
         append_jsonl(self.diary_dir / "research_diary.jsonl", entry)
@@ -115,8 +125,14 @@ class ResearchMemory:
     def record_experiment(self, experiment: ExperimentRecord) -> None:
         append_jsonl(self.experiments_dir / "experiment_records.jsonl", experiment)
 
+    def record_execution(self, execution: ExperimentRecord) -> None:
+        append_jsonl(self.logs_dir / "execution_records.jsonl", execution)
+
     def record_report(self, report: GeneratedReport) -> None:
         append_jsonl(self.reports_dir / "generated_reports.jsonl", report)
+
+    def record_failure(self, failure: ClassifiedFailure) -> None:
+        append_jsonl(self.memory_dir / "classified_failures.jsonl", failure)
 
     def record_tool_event(self, payload: dict[str, Any]) -> None:
         append_jsonl(self.logs_dir / "tool_events.jsonl", payload)

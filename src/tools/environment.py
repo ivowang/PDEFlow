@@ -181,6 +181,9 @@ class ManagedEnvironmentMixin:
         gpu_ids: list[int] | None = None,
         log_path: str | None = None,
         allow_failure: bool = True,
+        job_kind: str = "environment_command",
+        stall_timeout_seconds: int | None = None,
+        emit_progress: bool = True,
     ) -> dict[str, object]:
         resolved_env = self._resolve_path(environment_path, default_root=self.managed_env_root)
         env_bin = self._environment_bin(resolved_env)
@@ -195,6 +198,9 @@ class ManagedEnvironmentMixin:
             gpu_ids=gpu_ids,
             log_path=log_path,
             allow_failure=allow_failure,
+            job_kind=job_kind,
+            stall_timeout_seconds=stall_timeout_seconds,
+            emit_progress=emit_progress,
         )
         self._record_tool_event(
             "run_in_environment",

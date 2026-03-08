@@ -39,6 +39,13 @@ class RetrievalConfig(BaseModel):
     repository_search_backend: str = "github"
     http_timeout_seconds: int = 60
     max_search_results: int = 10
+    default_min_dataset_size_bytes: int = 1_048_576
+    download_chunk_size_bytes: int = 1_048_576
+    no_progress_timeout_seconds: int = 180
+    min_transfer_throughput_bytes_per_second: int = 16_384
+    throughput_window_seconds: int = 60
+    max_transfer_attempts: int = 3
+    quarantine_corrupted_artifacts: bool = True
 
 
 class ExecutionConfig(BaseModel):

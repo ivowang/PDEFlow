@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from .entities import (
     ArtifactRecord,
+    CapabilityMatrix,
     CandidateDirection,
     EnvironmentSnapshot,
     ExperimentPlan,
@@ -14,6 +15,7 @@ from .entities import (
     HypothesisRecord,
     MethodDesign,
     PaperNote,
+    PreflightReport,
     ProgramCandidate,
     ReflectionRecord,
     RepositoryRecord,
@@ -34,6 +36,7 @@ class LiteraturePhaseOutput(BaseModel):
 class AcquisitionPhaseOutput(BaseModel):
     summary: str
     environment_snapshot: EnvironmentSnapshot
+    capability_matrix: CapabilityMatrix | None = None
     secret_status: list[SecretStatus] = Field(default_factory=list)
     external_artifacts: list[ArtifactRecord] = Field(default_factory=list)
     repositories: list[RepositoryRecord] = Field(default_factory=list)
@@ -80,6 +83,14 @@ class CodingPhaseOutput(BaseModel):
 class ExperimentPlanningPhaseOutput(BaseModel):
     summary: str
     experiment_plans: list[ExperimentPlan]
+    next_actions: list[str] = Field(default_factory=list)
+
+
+class PreflightValidationPhaseOutput(BaseModel):
+    summary: str
+    preflight_reports: list[PreflightReport]
+    capability_matrix: CapabilityMatrix | None = None
+    failure_summaries: list[str] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
 
 
