@@ -18,12 +18,15 @@ try:
     RunConfig = getattr(_sdk, "RunConfig", None)
     Runner = getattr(_sdk, "Runner", None)
     SQLiteSession = getattr(_sdk, "SQLiteSession", None)
+    _exceptions = getattr(_sdk, "exceptions", None)
+    MaxTurnsExceeded = getattr(_exceptions, "MaxTurnsExceeded", None)
 except ImportError:  # pragma: no cover
     Agent = None
     OpenAIProvider = None
     RunConfig = None
     Runner = None
     SQLiteSession = None
+    MaxTurnsExceeded = None
 
 
 class RuntimeProviderMixin:

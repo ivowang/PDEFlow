@@ -57,6 +57,18 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def read_jsonl(path: Path) -> list[Any]:
+    if not path.exists():
+        return []
+    rows: list[Any] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if stripped:
+                rows.append(json.loads(stripped))
+    return rows
+
+
 def append_jsonl(path: Path, payload: Any) -> None:
     ensure_dir(path.parent)
     with path.open("a", encoding="utf-8") as handle:

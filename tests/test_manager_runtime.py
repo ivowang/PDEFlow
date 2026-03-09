@@ -7,21 +7,25 @@ from unittest.mock import patch
 
 from pydantic import BaseModel
 
-from research_agents import ExperimentAgent, PreflightValidationAgent
+from research_agents import AcquisitionAgent, ExperimentAgent, PreflightValidationAgent
 from config import ResearchBriefConfig, RuntimeConfig, SystemConfig
 from memory import ResearchMemory
 from orchestration import ResearchManager
 from orchestration.failures import classify_state_failures
 from runtime import RuntimeAdapter
+from runtime.provider import MaxTurnsExceeded
 from state import (
     ArtifactDownloadMetadata,
     ArtifactRecord,
     ArtifactStatus,
     ArtifactValidationResult,
     CapabilityMatrix,
+    EnvironmentSnapshot,
     ExperimentPhaseOutput,
     ExperimentPlan,
     ExperimentRecord,
+    RepositoryRecord,
+    ResearchPhase,
     ResearchState,
 )
 from tools import ResearchTools
@@ -54,6 +58,53 @@ class RuntimeAdapterTests(unittest.TestCase):
         result = adapter._validate_prompt_json_output('{"summary":"broken" "count":1}', DummyOutput)
         self.assertEqual(result.summary, "repaired")
         self.assertEqual(result.count, 1)
+
+    def test_run_structured_retries_finalization_after_max_turns(self) -> None:
+        adapter = RuntimeAdapter(RuntimeConfig(provider="openrouter", model="openai/gpt-5.4"), session_db_path=":memory:")
+        adapter.ensure_ready = lambda: None  # type: ignore[method-assign]
+        adapter._build_run_config = lambda specialist_name: None  # type: ignore[method-assign]
+        adapter._build_session = lambda session_id: object()  # type: ignore[method-assign]
+        calls: list[tuple[Any, int]] = []
+
+        class _Result:
+            def __init__(self, final_output: str):
+                self.final_output = final_output
+
+        def fake_run_sync(agent, payload, session, run_config, max_turns):  # noqa: ANN001
+            calls.append((agent, max_turns))
+            if len(calls) == 1:
+                raise MaxTurnsExceeded("Max turns (32) exceeded")
+            return _Result('{"summary":"finalized","count":2}')
+
+        adapter._run_sync_with_session = fake_run_sync  # type: ignore[method-assign]
+        result = adapter.run_structured(
+            specialist_name="AcquisitionAgent",
+            instructions="Return JSON.",
+            payload={"x": 1},
+            session_id="session-1",
+            output_type=DummyOutput,
+            tools=["tool"],
+        )
+        self.assertEqual(result.summary, "finalized")
+        self.assertEqual(result.count, 2)
+        self.assertEqual(len(calls), 2)
+
+
+class ToolWhitelistTests(unittest.TestCase):
+    def test_acquisition_agent_does_not_expose_arbitrary_shell_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = make_config()
+            memory = ResearchMemory(root=root)
+            tools = ResearchTools(config=config, memory=memory, repo_root=Path("/root/PDEFlow"))
+            tool_names = {
+                getattr(tool, "name", getattr(tool, "__name__", None))
+                for tool in AcquisitionAgent().build_tools(tools)
+            }
+            self.assertIn("clone_repository", tool_names)
+            self.assertIn("download_file", tool_names)
+            self.assertNotIn("run_command", tool_names)
+            self.assertNotIn("run_in_environment", tool_names)
 
 
 class ExperimentPlanStatusTests(unittest.TestCase):
@@ -139,6 +190,53 @@ class ManagerRoutingTests(unittest.TestCase):
         self.assertEqual(route.phases[1].phase.value, "experiment_planning")
         self.assertEqual(route.phases[2].phase.value, "preflight_validation")
         self.assertIn("baseline route is not launch-ready", route.reason)
+
+    def test_acquisition_phase_recovers_from_persisted_tool_side_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = make_config(run_name="acq-recover")
+            manager = ResearchManager(config=config, repo_root=Path("/root/PDEFlow"))
+            manager.work_directory = root
+            manager.memory = ResearchMemory(root=root)
+            manager.tools = ResearchTools(config=config, memory=manager.memory, repo_root=Path("/root/PDEFlow"))
+            state = ResearchState(
+                project_name=config.project_name,
+                run_name=config.run_name,
+                work_directory=str(root),
+                research_brief=config.research_brief,
+                environment_snapshot=EnvironmentSnapshot(
+                    python_executable="python",
+                    python_version="3.10",
+                    uv_available=True,
+                ),
+            )
+            repo_root = root / "external_assets" / "repos" / "pdebench"
+            repo_root.mkdir(parents=True, exist_ok=True)
+            manager.memory.record_repository(
+                RepositoryRecord(
+                    repo_id="pdebench",
+                    canonical_id="github-pdebench-pdebench",
+                    name="pdebench",
+                    remote_url="https://github.com/pdebench/PDEBench.git",
+                    local_path=str(repo_root),
+                    bootstrap_status="cloned",
+                )
+            )
+
+            class _FailingAcquisitionAgent:
+                name = "AcquisitionAgent"
+
+                def run(self, state, tools, runtime):  # noqa: ANN001
+                    raise MaxTurnsExceeded("Max turns (32) exceeded")
+
+            manager.agents["acquisition"] = _FailingAcquisitionAgent()
+            summary = manager._run_phase(
+                state,
+                manager.front_phases[1],
+            )
+            self.assertIn("Recovered acquisition state", summary)
+            self.assertEqual(len(state.repositories), 1)
+            self.assertEqual(state.repositories[0].canonical_id, "github-pdebench-pdebench")
 
 
 class PreflightTests(unittest.TestCase):

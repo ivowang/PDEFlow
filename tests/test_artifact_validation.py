@@ -100,6 +100,47 @@ class ArtifactValidationTests(unittest.TestCase):
             self.assertIsNotNone(validated.quarantine_path)
             self.assertFalse(path.exists())
 
+    def test_hdf5_validation_falls_back_to_subprocess_when_local_h5py_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = make_config()
+            memory = ResearchMemory(root=root)
+            tools = ResearchTools(config=config, memory=memory, repo_root=Path("/root/PDEFlow"))
+            path = root / "dataset.hdf5"
+            data = b"synthetic-hdf5-payload"
+            path.write_bytes(data)
+            artifact = ArtifactRecord(
+                artifact_id="dataset-3",
+                artifact_type="dataset",
+                title="dataset",
+                rationale="test",
+                local_path=str(path),
+                status="downloaded",
+                metadata={"min_size_bytes": 1, "required_keys": ["u"]},
+            )
+
+            def fake_run_command(command, **kwargs):  # noqa: ANN001
+                return {
+                    "command": command,
+                    "cwd": str(root),
+                    "returncode": 0,
+                    "stdout_tail": (
+                        '{"format_valid": true, "top_level_keys": ["u"], '
+                        '"sample_read_target": "u", "sample_shape": [2, 3], "failure_reasons": []}'
+                    ),
+                    "stderr_tail": "",
+                    "log_path": str(root / "cmd.log"),
+                    "emit_progress": False,
+                    "job_kind": "command",
+                }
+
+            with patch("tools.artifacts.h5py", None):
+                with patch.object(tools, "run_command", side_effect=fake_run_command):
+                    validated = tools.validate_artifact_record(artifact, quarantine_on_failure=False)
+            self.assertEqual(validated.status, "ready_for_training")
+            self.assertEqual(validated.validation.top_level_keys, ["u"])
+            self.assertEqual(validated.validation.sample_read_target, "u")
+
 
 if __name__ == "__main__":
     unittest.main()

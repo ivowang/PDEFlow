@@ -20,6 +20,9 @@ class ProblemFramingAgent(BaseResearchAgent):
     phase = ResearchPhase.PROBLEM_FRAMING
     output_model = ProblemFramingPhaseOutput
 
+    def allowed_tool_names(self) -> set[str] | None:
+        return set()
+
     def build_instructions(self, state: ResearchState) -> str:
         return """
 You are the problem-framing specialist.
@@ -61,6 +64,9 @@ class DiagnosisAgent(BaseResearchAgent):
     phase = ResearchPhase.DIAGNOSIS
     output_model = DiagnosisPhaseOutput
 
+    def allowed_tool_names(self) -> set[str] | None:
+        return set()
+
     def build_instructions(self, state: ResearchState) -> str:
         return """
 You are the diagnosis specialist.
@@ -99,6 +105,9 @@ class HypothesisAgent(BaseResearchAgent):
     phase = ResearchPhase.HYPOTHESIS
     output_model = HypothesisPhaseOutput
 
+    def allowed_tool_names(self) -> set[str] | None:
+        return set()
+
     def build_instructions(self, state: ResearchState) -> str:
         return """
 You are the hypothesis specialist.
@@ -131,6 +140,9 @@ class MethodDesignAgent(BaseResearchAgent):
     name = "MethodDesignAgent"
     phase = ResearchPhase.METHOD_DESIGN
     output_model = MethodDesignPhaseOutput
+
+    def allowed_tool_names(self) -> set[str] | None:
+        return set()
 
     def build_instructions(self, state: ResearchState) -> str:
         return """

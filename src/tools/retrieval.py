@@ -24,7 +24,7 @@ from common import (
     slugify,
     write_json,
 )
-from state import ArtifactDownloadMetadata, ArtifactRecord
+from state import ArtifactDownloadMetadata, ArtifactRecord, RepositoryRecord
 
 
 _OWNER_REPO_RE = re.compile(r"github\.com[:/]+([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", flags=re.IGNORECASE)
@@ -533,6 +533,16 @@ class RetrievalToolsMixin:
         local_path = self.shared_workspace_root / "repos" / repo_name
         ensure_dir(local_path.parent)
         if local_path.exists():
+            repository = RepositoryRecord(
+                repo_id=repo_name,
+                canonical_id=canonicalize_repo_id(repo_name, repo_url),
+                raw_aliases=[repo_name],
+                name=Path(repo_name).name,
+                remote_url=repo_url,
+                local_path=str(local_path),
+                bootstrap_status="cloned",
+            )
+            self.memory.record_repository(repository)
             result = {
                 "status": "available",
                 "path": str(local_path),
@@ -577,6 +587,18 @@ class RetrievalToolsMixin:
             "commit": commit_result["stdout_tail"] or None,
             "canonical_id": canonicalize_repo_id(repo_name, repo_url),
         }
+        self.memory.record_repository(
+            RepositoryRecord(
+                repo_id=repo_name,
+                canonical_id=canonicalize_repo_id(repo_name, repo_url),
+                raw_aliases=[repo_name],
+                name=Path(repo_name).name,
+                remote_url=repo_url,
+                local_path=str(local_path),
+                bootstrap_status="cloned",
+                notes=[f"commit={commit_result['stdout_tail'] or 'unknown'}"],
+            )
+        )
         self._cache_repo_result(repo_url, [{
             "name": Path(repo_name).name,
             "full_name": canonicalize_repo_id(repo_name, repo_url),

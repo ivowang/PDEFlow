@@ -23,6 +23,25 @@ class CoderAgent(BaseResearchAgent):
     phase = ResearchPhase.CODING
     output_model = CodingPhaseOutput
 
+    def allowed_tool_names(self) -> set[str] | None:
+        return {
+            "inspect_directory_tree",
+            "read_text_file",
+            "search_in_directory",
+            "find_files",
+            "detect_project_manifests",
+            "copy_tree",
+            "write_text_file",
+            "write_json_file",
+            "write_patch_file",
+            "apply_patch_file",
+            "bootstrap_python_environment",
+            "ensure_python_environment",
+            "inspect_python_environment",
+            "run_command",
+            "run_in_environment",
+        }
+
     def build_instructions(self, state: ResearchState) -> str:
         return """
 You are the coding specialist.
@@ -64,6 +83,19 @@ class ExperimentPlannerAgent(BaseResearchAgent):
     name = "ExperimentPlannerAgent"
     phase = ResearchPhase.EXPERIMENT_PLANNING
     output_model = ExperimentPlanningPhaseOutput
+
+    def allowed_tool_names(self) -> set[str] | None:
+        return {
+            "inspect_directory_tree",
+            "read_text_file",
+            "search_in_directory",
+            "find_files",
+            "detect_project_manifests",
+            "inspect_python_environment",
+            "probe_capability_matrix",
+            "parse_json_file",
+            "parse_metrics_file",
+        }
 
     def build_instructions(self, state: ResearchState) -> str:
         return """
@@ -315,6 +347,20 @@ class ExperimentAgent(BaseResearchAgent):
     phase = ResearchPhase.EXPERIMENT
     output_model = ExperimentPhaseOutput
 
+    def allowed_tool_names(self) -> set[str] | None:
+        return {
+            "inspect_directory_tree",
+            "read_text_file",
+            "search_in_directory",
+            "find_files",
+            "inspect_python_environment",
+            "probe_capability_matrix",
+            "run_command",
+            "run_in_environment",
+            "parse_json_file",
+            "parse_metrics_file",
+        }
+
     def build_instructions(self, state: ResearchState) -> str:
         return """
 You are the experiment execution specialist.
@@ -388,6 +434,9 @@ class ReflectionAgent(BaseResearchAgent):
     name = "ReflectionAgent"
     phase = ResearchPhase.REFLECTION
     output_model = ReflectionPhaseOutput
+
+    def allowed_tool_names(self) -> set[str] | None:
+        return set()
 
     def build_instructions(self, state: ResearchState) -> str:
         return """

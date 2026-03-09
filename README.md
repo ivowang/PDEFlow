@@ -125,14 +125,14 @@ Manual confirmation is never trusted blindly. The system re-scans and re-validat
 Run artifacts are written under `execution.work_directory`:
 
 - `state/`: structured state snapshots
-- `logs/`: command logs and tool events
+- `logs/`: unified logging system output
 - `memory/`: episodic, semantic, and idea memory
 - `literature/`: paper notes
 - `programs/`: program lineage database
 - `artifacts/`: artifact registry with validation/checksum metadata
 - `preflight/`: preflight reports for concrete experiment plans
 - `memory/hitl_events.jsonl`: structured human-intervention requests, responses, and re-validation outcomes
-- `experiments/`: experiment records and logs
+- `experiments/`: experiment records and outputs
 - `reports/`: generated markdown reports
 - `workspaces/`: child program workspaces
 - `envs/`: managed Python environments created by the system
@@ -151,7 +151,19 @@ The intended convention is that all research content for a run stays inside the 
 - state snapshots and memory
 - research reports
 
-Live progress is also written to `<work_directory>/process.txt` and printed to the terminal during execution.
+The unified logging system maintains three main granularities:
+
+- `logs/core_progress.log` and `logs/core_progress.jsonl`: high-signal scientific milestones only, such as a new hypothesis, a concrete method design, an experiment result, or a meaningful reflection outcome
+- `logs/agent_activity.log` and `logs/agent_activity.jsonl`: per-agent start/end/failure records with the agent’s phase-level content
+- `logs/debug.log` and `logs/debug.jsonl`: the full execution trace, including routing rationale, tool activity, command progress, and failure details
+
+Additional structured streams remain under `logs/` where useful, such as:
+
+- `logs/tool_events.jsonl`
+- `logs/phase_events.jsonl`
+- `logs/cmd-*.log` for full command stdout/stderr capture
+
+`<work_directory>/process.txt` is now a compatibility mirror of the debug stream. It is still printed to the terminal during execution, but it is managed by the same unified logging system rather than by separate ad hoc writes.
 
 ## Package Layout
 
@@ -176,6 +188,7 @@ Live progress is also written to `<work_directory>/process.txt` and printed to t
 - The capability matrix and classified failure state are persisted in run state so repeated cycles do not rediscover the same blockers from scratch.
 - Repeated unresolved blockers can trigger first-class human-in-the-loop escalation in the terminal; the manager records the request, waits for input, and consumes the response on the next step instead of continuing silent retry loops.
 - Acquisition/repair work, preflight checks, and real experiments are tracked separately so experiment history is not polluted by data-repair attempts.
+- Logging is unified under one logger that emits core scientific progress logs, agent activity logs, and full debug traces while still mirroring the live stream to `process.txt`.
 - The current repository is live-only. There is no mock runtime.
 - The system can create and repair managed `uv` environments under the run work directory instead of relying on a pre-existing project `venv`.
 - The system uses real shell commands, downloads, repo cloning, and environment setup, so it should be run on a controlled research machine.

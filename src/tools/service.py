@@ -43,7 +43,7 @@ class ResearchTools(
     def __init__(self, config: SystemConfig, memory: ResearchMemory, repo_root):
         super().__init__(config=config, memory=memory, repo_root=repo_root)
 
-    def build_function_tools(self) -> list[Any]:
+    def build_function_tools(self, allowed_names: set[str] | None = None) -> list[Any]:
         if function_tool is None:
             return []
 
@@ -285,35 +285,38 @@ class ResearchTools(
             """Write a markdown report to the current run report directory."""
             return {"path": str(self.write_report(filename, content))}
 
-        return [
-            inspect_secret_status,
-            inspect_compute_environment,
-            search_arxiv_papers,
-            search_github_repositories,
-            fetch_url_text,
-            download_file,
-            compute_file_checksum,
-            validate_artifact,
-            extract_pdf_text,
-            clone_repository,
-            inspect_directory_tree,
-            read_text_file,
-            search_in_directory,
-            find_files,
-            detect_project_manifests,
-            bootstrap_python_environment,
-            ensure_python_environment,
-            inspect_python_environment,
-            probe_capability_matrix,
-            copy_tree,
-            write_text_file,
-            write_json_file,
-            write_patch_file,
-            apply_patch_file,
-            run_command,
-            run_in_environment,
-            preflight_experiment_plan,
-            parse_json_file,
-            parse_metrics_file,
-            write_report,
-        ]
+        tool_map = {
+            "inspect_secret_status": inspect_secret_status,
+            "inspect_compute_environment": inspect_compute_environment,
+            "search_arxiv_papers": search_arxiv_papers,
+            "search_github_repositories": search_github_repositories,
+            "fetch_url_text": fetch_url_text,
+            "download_file": download_file,
+            "compute_file_checksum": compute_file_checksum,
+            "validate_artifact": validate_artifact,
+            "extract_pdf_text": extract_pdf_text,
+            "clone_repository": clone_repository,
+            "inspect_directory_tree": inspect_directory_tree,
+            "read_text_file": read_text_file,
+            "search_in_directory": search_in_directory,
+            "find_files": find_files,
+            "detect_project_manifests": detect_project_manifests,
+            "bootstrap_python_environment": bootstrap_python_environment,
+            "ensure_python_environment": ensure_python_environment,
+            "inspect_python_environment": inspect_python_environment,
+            "probe_capability_matrix": probe_capability_matrix,
+            "copy_tree": copy_tree,
+            "write_text_file": write_text_file,
+            "write_json_file": write_json_file,
+            "write_patch_file": write_patch_file,
+            "apply_patch_file": apply_patch_file,
+            "run_command": run_command,
+            "run_in_environment": run_in_environment,
+            "preflight_experiment_plan": preflight_experiment_plan,
+            "parse_json_file": parse_json_file,
+            "parse_metrics_file": parse_metrics_file,
+            "write_report": write_report,
+        }
+        if allowed_names is None:
+            return list(tool_map.values())
+        return [tool_map[name] for name in tool_map if name in allowed_names]

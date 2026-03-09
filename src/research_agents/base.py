@@ -34,8 +34,11 @@ class BaseResearchAgent(ABC):
                 state.semantic_memory_notes.append(note)
                 tools.memory.record_semantic(note=note, source=self.name)
 
+    def allowed_tool_names(self) -> set[str] | None:
+        return None
+
     def build_tools(self, tools: ResearchTools) -> list[Any]:
-        return tools.build_function_tools()
+        return tools.build_function_tools(self.allowed_tool_names())
 
     @abstractmethod
     def build_instructions(self, state: ResearchState) -> str:

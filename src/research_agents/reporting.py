@@ -13,6 +13,9 @@ class ReporterAgent(BaseResearchAgent):
     phase = ResearchPhase.REPORTING
     output_model = ReportingPhaseOutput
 
+    def allowed_tool_names(self) -> set[str] | None:
+        return {"write_report"}
+
     def build_instructions(self, state: ResearchState) -> str:
         return """
 You are the reporting specialist.

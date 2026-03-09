@@ -13,6 +13,17 @@ class LiteratureAgent(BaseResearchAgent):
     phase = ResearchPhase.LITERATURE_REVIEW
     output_model = LiteraturePhaseOutput
 
+    def allowed_tool_names(self) -> set[str] | None:
+        return {
+            "search_arxiv_papers",
+            "fetch_url_text",
+            "download_file",
+            "extract_pdf_text",
+            "read_text_file",
+            "search_in_directory",
+            "find_files",
+        }
+
     def build_instructions(self, state: ResearchState) -> str:
         return """
 You are the literature specialist in an autonomous scientific research system.
@@ -47,6 +58,29 @@ class AcquisitionAgent(BaseResearchAgent):
     name = "AcquisitionAgent"
     phase = ResearchPhase.ACQUISITION
     output_model = AcquisitionPhaseOutput
+
+    def allowed_tool_names(self) -> set[str] | None:
+        return {
+            "inspect_secret_status",
+            "inspect_compute_environment",
+            "search_arxiv_papers",
+            "search_github_repositories",
+            "fetch_url_text",
+            "download_file",
+            "compute_file_checksum",
+            "validate_artifact",
+            "clone_repository",
+            "inspect_directory_tree",
+            "read_text_file",
+            "search_in_directory",
+            "find_files",
+            "detect_project_manifests",
+            "bootstrap_python_environment",
+            "ensure_python_environment",
+            "inspect_python_environment",
+            "probe_capability_matrix",
+            "parse_json_file",
+        }
 
     def build_instructions(self, state: ResearchState) -> str:
         return """
@@ -115,4 +149,10 @@ Rules:
         for program in output.program_candidates:
             tools.memory.register_program(program)
         self.record_semantic_notes(state, tools, output.semantic_notes + output.acquisition_notes)
-        return output.summary
+        if output.summary.strip():
+            return output.summary
+        return (
+            "Acquisition updated the workspace state. "
+            f"repositories={len(state.repositories)} artifacts={len(state.external_artifacts)} "
+            f"environments={len(state.environment_records)} baseline={state.selected_baseline_program_id or 'unset'}."
+        )

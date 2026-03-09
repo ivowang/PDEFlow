@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import shlex
 import shutil
 from pathlib import Path
+import sys
 from typing import Any
 
 try:
@@ -21,6 +24,75 @@ from state import (
 
 
 class ArtifactValidationMixin:
+    def _candidate_hdf5_validation_pythons(self) -> list[str]:
+        candidates = [Path(sys.executable)]
+        candidates.extend(sorted(self.managed_env_root.glob("*/bin/python")))
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for candidate in candidates:
+            resolved = str(candidate.resolve())
+            if resolved not in seen and Path(resolved).exists():
+                seen.add(resolved)
+                ordered.append(resolved)
+        return ordered
+
+    def _validate_hdf5_via_subprocess(
+        self,
+        path: Path,
+        required_keys: list[str],
+    ) -> dict[str, Any] | None:
+        script = (
+            "import json\n"
+            "import h5py\n"
+            f"path = {path.as_posix()!r}\n"
+            f"required_keys = {required_keys!r}\n"
+            "payload = {'format_valid': False, 'top_level_keys': [], 'sample_read_target': None, 'sample_shape': [], 'failure_reasons': []}\n"
+            "try:\n"
+            "    with h5py.File(path, 'r') as handle:\n"
+            "        keys = sorted(handle.keys())\n"
+            "        payload['top_level_keys'] = keys\n"
+            "        missing = [key for key in required_keys if key not in handle]\n"
+            "        if missing:\n"
+            "            payload['failure_reasons'].append('missing_required_keys:' + ','.join(missing))\n"
+            "        sample = None\n"
+            "        for key in keys:\n"
+            "            item = handle[key]\n"
+            "            if hasattr(item, 'shape'):\n"
+            "                sample = item\n"
+            "                payload['sample_read_target'] = key\n"
+            "                payload['sample_shape'] = [int(dim) for dim in getattr(item, 'shape', ()) if isinstance(dim, (int, float))]\n"
+            "                break\n"
+            "        if sample is not None:\n"
+            "            try:\n"
+            "                if getattr(sample, 'ndim', 0) == 0:\n"
+            "                    _ = sample[()]\n"
+            "                else:\n"
+            "                    index = tuple(0 for _ in range(getattr(sample, 'ndim', 0)))\n"
+            "                    _ = sample[index]\n"
+            "            except Exception as exc:\n"
+            "                payload['failure_reasons'].append('sample_read_failed:' + str(exc))\n"
+            "        payload['format_valid'] = not payload['failure_reasons']\n"
+            "except Exception as exc:\n"
+            "    payload['failure_reasons'].append('hdf5_open_failed:' + str(exc))\n"
+            "print(json.dumps(payload))\n"
+        )
+        for python_executable in self._candidate_hdf5_validation_pythons():
+            probe = self.run_command(
+                f"{shlex.quote(python_executable)} -c {shlex.quote(script)}",
+                cwd=path.parent,
+                allow_failure=True,
+                emit_progress=False,
+            )
+            if probe["returncode"] != 0 or not probe["stdout_tail"]:
+                continue
+            try:
+                payload = json.loads(str(probe["stdout_tail"]).splitlines()[-1])
+            except json.JSONDecodeError:
+                continue
+            payload["validator_python"] = python_executable
+            return payload
+        return None
+
     def compute_file_checksum(self, path: str, algorithm: str = "md5") -> dict[str, Any]:
         resolved = self._resolve_path(path)
         digest = hashlib.new(algorithm)
@@ -96,19 +168,54 @@ class ArtifactValidationMixin:
         required_keys = list((artifact.metadata or {}).get("required_keys", []))
         format_valid = False
         if h5py is None:
-            failure_reasons.append("h5py_unavailable")
+            subprocess_payload = self._validate_hdf5_via_subprocess(path, required_keys)
+            if subprocess_payload is None:
+                failure_reasons.append("h5py_unavailable")
+                return ArtifactValidationResult(
+                    validator="hdf5",
+                    status=ArtifactStatus.CORRUPTED,
+                    exists=True,
+                    size_bytes=size_bytes,
+                    min_size_bytes=min_size_bytes,
+                    size_ok=size_ok,
+                    format_valid=False,
+                    ready_for_training=False,
+                    checksum=checksum,
+                    failure_reasons=failure_reasons,
+                    details={"path": str(path)},
+                )
+            top_level_keys = list(subprocess_payload.get("top_level_keys", []))
+            sample_target = subprocess_payload.get("sample_read_target")
+            sample_shape = list(subprocess_payload.get("sample_shape", []))
+            failure_reasons.extend(list(subprocess_payload.get("failure_reasons", [])))
+            format_valid = bool(subprocess_payload.get("format_valid", False))
+            details.update({"validator_python": subprocess_payload.get("validator_python")})
+            ready = size_ok and format_valid and (checksum is None or checksum.matched is not False)
+            if not size_ok:
+                failure_reasons.insert(0, f"size_below_minimum:{size_bytes}<{min_size_bytes}")
+            if checksum is not None and checksum.expected is not None and checksum.matched is False:
+                failure_reasons.append("checksum_mismatch")
+            if ready:
+                status = ArtifactStatus.READY_FOR_TRAINING
+            elif checksum is not None and checksum.matched:
+                status = ArtifactStatus.CHECKSUM_VERIFIED if not format_valid else ArtifactStatus.FORMAT_VERIFIED
+            else:
+                status = ArtifactStatus.CORRUPTED
             return ArtifactValidationResult(
                 validator="hdf5",
-                status=ArtifactStatus.CORRUPTED,
+                status=status,
                 exists=True,
                 size_bytes=size_bytes,
                 min_size_bytes=min_size_bytes,
                 size_ok=size_ok,
-                format_valid=False,
-                ready_for_training=False,
+                format_valid=format_valid,
+                ready_for_training=ready,
+                top_level_keys=top_level_keys,
+                sample_read_target=sample_target,
+                sample_shape=sample_shape,
                 checksum=checksum,
                 failure_reasons=failure_reasons,
-                details={"path": str(path)},
+                details=details,
             )
         try:
             with h5py.File(path, "r") as handle:

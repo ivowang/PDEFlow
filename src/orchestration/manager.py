@@ -41,7 +41,7 @@ from state import (
     RouteDecisionRecord,
 )
 from tools import ResearchTools
-from common import canonicalize_env_id, now_utc, short_hash
+from common import canonicalize_env_id, now_utc, short_hash, upsert_by_attr
 from .normalization import normalize_artifacts, normalize_environments, normalize_repositories
 from .routing import ManagerRoutingMixin
 from .specs import CycleRoute, PhaseSpec
@@ -176,6 +176,64 @@ class ResearchManager(ManagerRoutingMixin):
             return [f"Reports generated: {len(state.generated_reports)}."]
         return []
 
+    def _core_progress_messages(self, state: ResearchState, phase: ResearchPhase, summary: str) -> list[tuple[str, str]]:
+        messages: list[tuple[str, str]] = []
+        if phase == ResearchPhase.LITERATURE_REVIEW:
+            messages.append(
+                (
+                    "literature_milestone",
+                    f"Literature review established the working frame with {len(state.literature_notes)} papers and {len(state.open_questions)} open questions.",
+                )
+            )
+        elif phase == ResearchPhase.ACQUISITION:
+            if state.selected_baseline_program_id or state.repositories or state.external_artifacts:
+                messages.append(
+                    (
+                        "acquisition_milestone",
+                        "Acquisition updated executable research assets: "
+                        f"repositories={len(state.repositories)} artifacts={len(state.external_artifacts)} "
+                        f"selected_baseline={state.selected_baseline_program_id or 'unset'}.",
+                    )
+                )
+        elif phase == ResearchPhase.HYPOTHESIS and state.hypotheses:
+            latest = state.hypotheses[-1]
+            messages.append(("hypothesis", f"Proposed hypothesis {latest.hypothesis_id}: {latest.title}."))
+        elif phase == ResearchPhase.METHOD_DESIGN and state.method_designs:
+            latest = state.method_designs[-1]
+            messages.append(("method_design", f"Designed method {latest.design_id}: {latest.title}."))
+        elif phase == ResearchPhase.CODING and state.program_candidates:
+            latest = state.program_candidates[-1]
+            messages.append(
+                (
+                    "implementation",
+                    f"Prepared program candidate {latest.program_id} with status={latest.status} and {len(latest.changed_files)} changed files.",
+                )
+            )
+        elif phase == ResearchPhase.EXPERIMENT_PLANNING and state.experiment_plans:
+            latest = state.experiment_plans[-1]
+            messages.append(("experiment_plan", f"Prepared experiment plan {latest.plan_id} for program {latest.program_id}."))
+        elif phase == ResearchPhase.EXPERIMENT and state.experiment_records:
+            latest = state.experiment_records[-1]
+            metric_text = ", ".join(f"{key}={value}" for key, value in latest.metrics.items()) or "no parsed metrics"
+            messages.append(
+                (
+                    "experiment_result",
+                    f"Experiment {latest.experiment_id} finished with status={latest.status}; {metric_text}.",
+                )
+            )
+        elif phase == ResearchPhase.REFLECTION and state.reflections:
+            latest = state.reflections[-1]
+            evidence = latest.evidence[0] if latest.evidence else "no breakthrough evidence recorded"
+            messages.append(("reflection", f"Reflection verdict={latest.verdict}. {evidence}"))
+        elif phase == ResearchPhase.REPORTING and state.generated_reports:
+            messages.append(("reporting", f"Reporting generated {len(state.generated_reports)} durable report artifacts."))
+        elif phase == ResearchPhase.HUMAN_INTERVENTION and state.hitl_events:
+            latest = state.hitl_events[-1]
+            messages.append(("hitl", f"Human intervention status={latest.status.value} for blocker_type={latest.blocker_type}."))
+        elif summary.strip():
+            messages.append(("phase_summary", summary.strip()))
+        return messages
+
     def _initial_state(self) -> ResearchState:
         state = ResearchState(
             project_name=self.config.project_name,
@@ -190,6 +248,24 @@ class ResearchManager(ManagerRoutingMixin):
         state.external_artifacts = normalize_artifacts(state.external_artifacts)
         state.repositories = normalize_repositories(state.repositories)
         state.environment_records = normalize_environments(state.environment_records)
+
+    def _hydrate_state_from_memory(self, state: ResearchState) -> None:
+        state.external_artifacts = upsert_by_attr(
+            state.external_artifacts,
+            self.memory.load_artifacts(),
+            "artifact_id",
+        )
+        state.repositories = upsert_by_attr(
+            state.repositories,
+            self.memory.load_repositories(),
+            "repo_id",
+        )
+        state.environment_records = upsert_by_attr(
+            state.environment_records,
+            self.memory.load_environments(),
+            "env_id",
+        )
+        self._normalize_state_assets(state)
 
     def _sync_environment_records(self, state: ResearchState) -> None:
         records = list(state.environment_records)
@@ -289,6 +365,7 @@ class ResearchManager(ManagerRoutingMixin):
             self.memory.record_blocker(blocker)
 
     def _post_phase_sync(self, state: ResearchState, spec: PhaseSpec) -> None:
+        self._hydrate_state_from_memory(state)
         self._normalize_state_assets(state)
         if spec.phase in {ResearchPhase.ACQUISITION, ResearchPhase.PREFLIGHT_VALIDATION}:
             self._validate_artifacts(state)
@@ -558,8 +635,19 @@ class ResearchManager(ManagerRoutingMixin):
         state.current_phase = spec.phase
         state.phase_history.append(spec.phase.value)
         agent = self.agents[spec.agent_key]
+        before_artifacts = len(state.external_artifacts)
+        before_repositories = len(state.repositories)
+        before_envs = len(state.environment_records)
         self._log(
             f"Starting phase {spec.phase.value} with {agent.name}. Cycle={state.cycle_index}."
+        )
+        self.memory.record_agent_event(
+            agent_name=agent.name,
+            phase=spec.phase,
+            status="started",
+            cycle_index=state.cycle_index,
+            content=f"Starting phase {spec.phase.value}.",
+            payload={"outputs": list(spec.outputs)},
         )
         try:
             summary = agent.run(state, self.tools, self.runtime)
@@ -567,6 +655,23 @@ class ResearchManager(ManagerRoutingMixin):
                 self._ground_experiment_plans(state)
             self._post_phase_sync(state, spec)
             self.memory.record_phase(spec.phase, summary, list(spec.outputs))
+            self.memory.record_agent_event(
+                agent_name=agent.name,
+                phase=spec.phase,
+                status="completed",
+                cycle_index=state.cycle_index,
+                content=summary,
+                payload={"outputs": list(spec.outputs), "phase_snapshot": self._phase_snapshot(state, spec.phase)},
+            )
+            for kind, message in self._core_progress_messages(state, spec.phase, summary):
+                self.memory.record_core_progress(
+                    message,
+                    kind=kind,
+                    phase=spec.phase,
+                    agent_name=agent.name,
+                    cycle_index=state.cycle_index,
+                    payload={"summary": summary},
+                )
             self.memory.save_state(state, label=spec.phase.value)
             self._log(
                 f"Completed phase {spec.phase.value} with {agent.name}. Summary: {summary}"
@@ -575,7 +680,53 @@ class ResearchManager(ManagerRoutingMixin):
                 self._log(line)
             return summary
         except Exception:
+            if spec.phase == ResearchPhase.ACQUISITION:
+                self._hydrate_state_from_memory(state)
+                self._post_phase_sync(state, spec)
+                if (
+                    len(state.external_artifacts) > before_artifacts
+                    or len(state.repositories) > before_repositories
+                    or len(state.environment_records) > before_envs
+                ):
+                    summary = (
+                        "Recovered acquisition state from persisted tool side effects after model/runtime failure. "
+                        f"artifacts={len(state.external_artifacts)} repositories={len(state.repositories)} "
+                        f"environments={len(state.environment_records)}"
+                    )
+                    self.memory.record_phase(spec.phase, summary, list(spec.outputs))
+                    self.memory.record_agent_event(
+                        agent_name=agent.name,
+                        phase=spec.phase,
+                        status="recovered",
+                        cycle_index=state.cycle_index,
+                        content=summary,
+                        payload={"outputs": list(spec.outputs), "phase_snapshot": self._phase_snapshot(state, spec.phase)},
+                    )
+                    for kind, message in self._core_progress_messages(state, spec.phase, summary):
+                        self.memory.record_core_progress(
+                            message,
+                            kind=kind,
+                            phase=spec.phase,
+                            agent_name=agent.name,
+                            cycle_index=state.cycle_index,
+                            payload={"summary": summary, "recovered": True},
+                        )
+                    self.memory.save_state(state, label=spec.phase.value)
+                    self._log(
+                        f"Completed phase {spec.phase.value} with {agent.name} via recovery. Summary: {summary}"
+                    )
+                    for line in self._phase_snapshot(state, spec.phase):
+                        self._log(line)
+                    return summary
             stack = traceback.format_exc()
+            self.memory.record_agent_event(
+                agent_name=agent.name,
+                phase=spec.phase,
+                status="failed",
+                cycle_index=state.cycle_index,
+                content=stack,
+                payload={"outputs": list(spec.outputs)},
+            )
             self._log(
                 f"Phase {spec.phase.value} with {agent.name} failed. Traceback follows.\n{stack}"
             )

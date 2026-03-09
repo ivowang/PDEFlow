@@ -27,6 +27,8 @@ from state import (
     SecretStatus,
 )
 from common import append_jsonl, ensure_dir, now_utc, to_plain_data, write_json
+from common import read_jsonl
+from .logging import ResearchLogger
 
 
 class ResearchMemory:
@@ -37,6 +39,7 @@ class ResearchMemory:
         self.process_path = self.root / "process.txt"
         self.state_dir = ensure_dir(root / "state")
         self.logs_dir = ensure_dir(root / "logs")
+        self.logger = ResearchLogger(root=self.root, logs_dir=self.logs_dir, process_path=self.process_path)
         self.memory_dir = ensure_dir(root / "memory")
         self.literature_dir = ensure_dir(root / "literature")
         self.reports_dir = ensure_dir(root / "reports")
@@ -87,6 +90,11 @@ class ResearchMemory:
         return path
 
     def record_phase(self, phase: ResearchPhase, summary: str, artifacts: list[str]) -> None:
+        self.logger.log_phase_event(
+            phase=phase.value,
+            summary=summary,
+            outputs=artifacts,
+        )
         append_jsonl(
             self.logs_dir / "research_log.jsonl",
             {"phase": phase.value, "summary": summary, "artifacts": artifacts},
@@ -159,15 +167,92 @@ class ResearchMemory:
         append_jsonl(self.state_dir / "cycle_deltas.jsonl", cycle_delta)
 
     def record_tool_event(self, payload: dict[str, Any]) -> None:
-        append_jsonl(self.logs_dir / "tool_events.jsonl", payload)
+        self.logger.log_tool_event(payload)
+
+    def record_agent_event(
+        self,
+        *,
+        agent_name: str,
+        phase: ResearchPhase,
+        status: str,
+        cycle_index: int,
+        content: str,
+        payload: dict[str, Any] | None = None,
+        print_to_terminal: bool = False,
+    ) -> None:
+        self.logger.log_agent_event(
+            agent_name=agent_name,
+            phase=phase.value,
+            status=status,
+            cycle_index=cycle_index,
+            content=content,
+            payload=payload,
+            print_to_terminal=print_to_terminal,
+        )
+
+    def record_core_progress(
+        self,
+        message: str,
+        *,
+        kind: str = "milestone",
+        phase: ResearchPhase | None = None,
+        agent_name: str | None = None,
+        cycle_index: int | None = None,
+        payload: dict[str, Any] | None = None,
+        print_to_terminal: bool = False,
+    ) -> None:
+        self.logger.log_core_progress(
+            message,
+            kind=kind,
+            phase=phase.value if phase is not None else None,
+            agent=agent_name,
+            cycle_index=cycle_index,
+            payload=payload,
+            print_to_terminal=print_to_terminal,
+        )
+
+    def _load_registry(self, path: Path, model_type: type[Any], key: str, fallback_key: str | None = None) -> list[Any]:
+        latest: dict[str, Any] = {}
+        for item in read_jsonl(path):
+            model = model_type.model_validate(item)
+            identifier = getattr(model, key)
+            if identifier is None and fallback_key is not None:
+                identifier = getattr(model, fallback_key)
+            latest[str(identifier)] = model
+        return list(latest.values())
+
+    def load_artifacts(self) -> list[ArtifactRecord]:
+        return self._load_registry(
+            self.artifacts_dir / "artifact_registry.jsonl",
+            ArtifactRecord,
+            "canonical_id",
+            fallback_key="artifact_id",
+        )
+
+    def load_repositories(self) -> list[RepositoryRecord]:
+        return self._load_registry(
+            self.repositories_dir / "repository_registry.jsonl",
+            RepositoryRecord,
+            "canonical_id",
+            fallback_key="repo_id",
+        )
+
+    def load_environments(self) -> list[EnvironmentRecord]:
+        return self._load_registry(
+            self.environments_dir / "environment_registry.jsonl",
+            EnvironmentRecord,
+            "canonical_id",
+            fallback_key="env_id",
+        )
 
     def record_process(self, message: str, print_to_terminal: bool = True) -> None:
-        ensure_dir(self.process_path.parent)
-        line = f"[{now_utc()}] {message}"
-        with self.process_path.open("a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
-        if print_to_terminal:
-            print(line, flush=True)
+        self.logger.log_debug(
+            message,
+            category="process",
+            event_type="process_message",
+            print_to_terminal=print_to_terminal,
+            mirror_to_process=True,
+        )
 
     def register_program(self, candidate: ProgramCandidate) -> None:
         payload = to_plain_data(candidate)
