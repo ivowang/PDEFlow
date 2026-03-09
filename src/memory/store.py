@@ -39,6 +39,7 @@ class ResearchMemory:
         self.process_path = self.root / "process.txt"
         self.state_dir = ensure_dir(root / "state")
         self.logs_dir = ensure_dir(root / "logs")
+        self.command_logs_dir = ensure_dir(self.logs_dir / "commands")
         self.logger = ResearchLogger(root=self.root, logs_dir=self.logs_dir, process_path=self.process_path)
         self.memory_dir = ensure_dir(root / "memory")
         self.literature_dir = ensure_dir(root / "literature")

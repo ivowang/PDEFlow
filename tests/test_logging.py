@@ -6,6 +6,7 @@ from pathlib import Path
 
 from config import ResearchBriefConfig, RuntimeConfig, SystemConfig
 from memory import ResearchMemory
+from tools import ResearchTools
 from state import ResearchPhase
 
 
@@ -55,6 +56,19 @@ class UnifiedLoggingTests(unittest.TestCase):
 
             tool_events = (root / "logs" / "tool_events.jsonl").read_text(encoding="utf-8")
             self.assertIn("search_github_repositories", tool_events)
+
+    def test_command_logs_are_grouped_under_commands_subdirectory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            memory = ResearchMemory(root=root)
+            tools = ResearchTools(config=make_config(), memory=memory, repo_root=root)
+
+            result = tools.run_command("python3 -c \"print('ok')\"", cwd=root, emit_progress=False)
+
+            log_path = Path(str(result["log_path"]))
+            self.assertTrue(log_path.exists())
+            self.assertEqual(log_path.parent, root / "logs" / "commands")
+            self.assertIn("ok", log_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

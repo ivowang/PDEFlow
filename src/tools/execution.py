@@ -30,7 +30,8 @@ class CommandExecutionMixin:
         log_file = (
             self._resolve_path(log_path, default_root=self.memory.logs_dir)
             if log_path
-            else self.memory.logs_dir / f"cmd-{short_hash(command, str(working_directory), now_utc())}.log"
+            else self.memory.command_logs_dir
+            / f"cmd-{short_hash(command, str(working_directory), now_utc())}.log"
         )
         ensure_dir(log_file.parent)
         env = os.environ.copy()

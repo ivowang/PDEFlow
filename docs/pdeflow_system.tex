@@ -235,6 +235,8 @@ PDEFlow also maintains a unified logging subsystem with three primary granularit
 
 These logs are emitted by a single logger implementation rather than by ad hoc writes spread across the codebase. For operator convenience, the traditional \texttt{process.txt} file is preserved as a compatibility mirror of the debug stream, while structured JSONL and human-readable log files are written under the run-local \texttt{logs/} directory.
 
+To keep the top-level logging surface readable during long runs, the three main human-facing streams remain at the root of \texttt{logs/}, while verbose per-command stdout/stderr captures are grouped under \texttt{logs/commands/}.
+
 \section{Tool Layer}
 The tool surface is a core part of the system. The current implementation supports:
 \begin{itemize}[leftmargin=1.5em]

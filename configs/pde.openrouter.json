@@ -47,7 +47,7 @@
   "runtime": {
     "backend": "openai_agents",
     "provider": "openrouter",
-    "model": "google/gemini-3.1-pro-preview",
+    "model": "openai/gpt-5.4",
     "max_turns": 32,
     "api_key_env_var": "OPENROUTER_API_KEY",
     "api_base_url": "https://openrouter.ai/api/v1",

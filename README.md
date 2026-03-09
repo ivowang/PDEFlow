@@ -161,7 +161,7 @@ Additional structured streams remain under `logs/` where useful, such as:
 
 - `logs/tool_events.jsonl`
 - `logs/phase_events.jsonl`
-- `logs/cmd-*.log` for full command stdout/stderr capture
+- `logs/commands/cmd-*.log` for full command stdout/stderr capture
 
 `<work_directory>/process.txt` is now a compatibility mirror of the debug stream. It is still printed to the terminal during execution, but it is managed by the same unified logging system rather than by separate ad hoc writes.
 
