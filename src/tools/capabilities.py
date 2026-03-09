@@ -20,10 +20,17 @@ class CapabilityProbeMixin:
 
     def _infer_exact_target(self, artifact: ArtifactRecord) -> bool:
         metadata = artifact.metadata or {}
+        if metadata.get("human_skip"):
+            return False
         if metadata.get("exact_target") is not None:
             return bool(metadata.get("exact_target"))
         if artifact.artifact_type != "dataset":
             return False
+        semantic = artifact.semantic_spec
+        if semantic and semantic.benchmark == "PDEBench" and semantic.equation in {"Burgers", "ReactionDiffusion"}:
+            return True
+        if metadata.get("official_checksum") or metadata.get("official_md5"):
+            return True
         if metadata.get("split") == "train" and (artifact.artifact_id.startswith("dataset-") or metadata.get("expected_filename")):
             return True
         return False
@@ -76,14 +83,17 @@ class CapabilityProbeMixin:
 
         repo_paths = [Path(path) for path in repository_paths]
         pdebench_trainable = any((path / "pdebench" / "models" / "train_models_forward.py").exists() for path in repo_paths)
+        repo_ready = bool(repo_paths)
+        env_ready = python_available and pip_available
+        codepath_ready = pdebench_trainable
         exact_target_artifacts = [item for item in artifacts if self._infer_exact_target(item)]
         exact_corrupted = [
-            (item.local_path or item.title)
+            (item.canonical_id or item.local_path or item.title)
             for item in exact_target_artifacts
             if item.status in {ArtifactStatus.CORRUPTED.value, ArtifactStatus.QUARANTINED.value}
         ]
         exact_missing = [
-            (item.local_path or item.title)
+            (item.canonical_id or item.local_path or item.title)
             for item in exact_target_artifacts
             if item.status in {ArtifactStatus.DOWNLOAD_FAILED.value, ArtifactStatus.BLOCKED.value}
         ]
@@ -92,12 +102,21 @@ class CapabilityProbeMixin:
             self._artifact_ready(item)
             and (
                 item.artifact_type == "checkpoint"
-                or not self._infer_exact_target(item)
+                or (item.artifact_type == "dataset" and not self._infer_exact_target(item))
             )
             for item in artifacts
         )
+        baseline_launch_ready = target_dataset_ready and pdebench_trainable and self._bool_module(modules, "torch") and self._bool_module(modules, "h5py")
+        smoke_ready = repo_ready and env_ready and codepath_ready and self._bool_module(modules, "torch")
         matrix = CapabilityMatrix(
             environment_path=env_path,
+            repo_ready=repo_ready,
+            env_ready=env_ready,
+            codepath_ready=codepath_ready,
+            dataset_ready=target_dataset_ready,
+            baseline_launch_ready=baseline_launch_ready,
+            experiment_plan_ready=baseline_launch_ready,
+            scientific_iteration_ready=baseline_launch_ready or fallback_assets_available or smoke_ready,
             python_available=python_available,
             pip_available=pip_available,
             torch_available=self._bool_module(modules, "torch"),
@@ -117,10 +136,7 @@ class CapabilityProbeMixin:
             exact_target_shards_missing=exact_missing,
             exact_target_shards_corrupted=exact_corrupted,
             fallback_assets_available=fallback_assets_available,
-            baseline_ready_to_launch=target_dataset_ready
-            and pdebench_trainable
-            and self._bool_module(modules, "torch")
-            and self._bool_module(modules, "h5py"),
+            baseline_ready_to_launch=baseline_launch_ready,
         )
         self._record_tool_event("probe_capability_matrix", matrix.model_dump(mode="python"))
         return matrix

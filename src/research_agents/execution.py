@@ -6,6 +6,7 @@ from state import (
     CapabilityMatrix,
     CodingPhaseOutput,
     ExperimentPhaseOutput,
+    ExperimentPlan,
     ExperimentPlanningPhaseOutput,
     PreflightValidationPhaseOutput,
     ReflectionPhaseOutput,
@@ -13,7 +14,7 @@ from state import (
     ResearchState,
 )
 from tools import ResearchTools
-from common import dedupe_strings, upsert_by_attr
+from common import dedupe_strings, now_utc, short_hash, upsert_by_attr
 from .base import BaseResearchAgent
 
 
@@ -79,6 +80,8 @@ You must:
 - prefer managed uv environments over ad hoc `python -m venv`, `source`, or bare `pip install`
 - a blocked or setup-failed baseline does not count as a completed baseline
 - if the selected baseline has no completed experiment record with real outputs, do not schedule downstream candidate launch plans except prerequisite acquisition/verification or matched baseline reruns
+- if the manager route focus requests fallback_execution, prefer an evidence-generating fallback experiment over returning an empty plan set
+- do not retry acquisition-dependent plans unchanged when the blocker registry says the same dataset acquisition route is exhausted
 - inspect the repository entrypoint and config semantics before writing launch commands; if the code separates dataset filename from dataset root, pass both correctly and override placeholder defaults with verified local artifact paths
 
 Rules:
@@ -103,14 +106,99 @@ Rules:
             "failure_summaries": state.failure_summaries[-12:],
             "capability_matrix": state.capability_matrix.model_dump(mode="python") if state.capability_matrix else None,
             "classified_failures": [item.model_dump(mode="python") for item in state.classified_failures[-12:]],
+            "blocker_registry": [item.model_dump(mode="python") for item in state.blocker_registry[-12:]],
+            "route_history": [item.model_dump(mode="python") for item in state.route_history[-6:]],
+            "active_route_id": state.active_route_id,
+            "active_route_focus": state.active_route_focus,
+            "hitl_events": [item.model_dump(mode="python") for item in state.hitl_events[-6:]],
+            "manual_asset_roots": state.manual_asset_roots,
+            "skipped_target_entities": state.skipped_target_entities,
+            "human_guidance_notes": state.human_guidance_notes[-12:],
         }
 
     def apply_output(self, state: ResearchState, tools: ResearchTools, output: ExperimentPlanningPhaseOutput) -> str:
+        if not output.experiment_plans and "fallback_execution" in state.active_route_focus:
+            fallback_plan = self._build_fallback_plan(state, tools)
+            if fallback_plan is not None:
+                output = output.model_copy(
+                    update={
+                        "experiment_plans": [fallback_plan],
+                        "summary": (
+                            output.summary
+                            + " Added a deterministic evidence-generating fallback experiment because the active route requests fallback execution."
+                        ),
+                        "next_actions": [
+                            *output.next_actions,
+                            "Run the fallback smoke experiment to generate empirical evidence while exact target datasets remain blocked.",
+                        ],
+                    }
+                )
         state.experiment_plans = upsert_by_attr(state.experiment_plans, output.experiment_plans, "plan_id")
         state.next_actions = output.next_actions
         for item in output.experiment_plans:
             tools.memory.record_experiment_plan(item)
         return output.summary
+
+    def _build_fallback_plan(self, state: ResearchState, tools: ResearchTools) -> ExperimentPlan | None:
+        capability = state.capability_matrix
+        if capability is None or not capability.env_ready or not capability.codepath_ready:
+            return None
+        repository = next((item for item in state.repositories if item.local_path), None)
+        if repository is None:
+            return None
+        env_path = repository.environment_path or capability.environment_path
+        if not env_path:
+            return None
+        ready_artifacts = [
+            item for item in state.external_artifacts
+            if item.status == "ready_for_training" and item.artifact_type in {"checkpoint", "dataset"}
+        ]
+        artifact_paths = [item.local_path for item in ready_artifacts if item.local_path][:3]
+        artifact_asserts = "\n".join(
+            f"assert Path({path!r}).exists(), {path!r}" for path in artifact_paths
+        )
+        report_path = tools.memory.experiments_dir / "fallback_smoke_metrics.json"
+        script = (
+            "python - <<'PY'\n"
+            "from pathlib import Path\n"
+            "import json\n"
+            "import torch\n"
+            "import h5py\n"
+            "import pdebench\n"
+            f"{artifact_asserts}\n"
+            "payload = {\n"
+            "  'mode': 'fallback_smoke',\n"
+            "  'torch_version': torch.__version__,\n"
+            "  'cuda_available': bool(torch.cuda.is_available()),\n"
+            f"  'checked_artifacts': {artifact_paths!r},\n"
+            "}\n"
+            f"Path({str(report_path)!r}).write_text(json.dumps(payload), encoding='utf-8')\n"
+            "print(json.dumps(payload))\n"
+            "PY"
+        )
+        return ExperimentPlan(
+            plan_id=f"fallback-smoke-{short_hash(state.run_name, str(state.cycle_index), now_utc())}",
+            title="Fallback smoke evidence run",
+            program_id=state.selected_baseline_program_id or "fallback-smoke",
+            repo_id=repository.canonical_id or repository.repo_id,
+            job_kind="experiment",
+            working_directory=repository.local_path,
+            setup_commands=[],
+            launch_command=script,
+            environment={"VIRTUAL_ENV": env_path},
+            gpu_ids=list(state.environment_snapshot.selected_gpu_ids if state.environment_snapshot else []),
+            required_artifact_ids=[item.canonical_id or item.artifact_id for item in ready_artifacts[:3]],
+            preflight_required=True,
+            expected_outputs=[str(report_path)],
+            success_criteria=["The fallback smoke run completes and emits a JSON payload proving repo/env execution works."],
+            stopping_rules=["Stop immediately on import or filesystem failure."],
+            log_path=str(tools.memory.experiments_dir / "fallback_smoke.log"),
+            status="planned",
+            notes=[
+                "evidence_generating_fallback",
+                "This plan exists to break zero-evidence stagnation while exact target datasets remain blocked.",
+            ],
+        )
 
 
 class PreflightValidationAgent(BaseResearchAgent):
@@ -129,6 +217,45 @@ class PreflightValidationAgent(BaseResearchAgent):
             plan for plan in state.experiment_plans
             if plan.status == "planned" and plan.job_kind == "experiment"
         ]
+        if not pending_plans:
+            zero_reason = "No experiment plans are launch-eligible after planning."
+            if state.capability_matrix and state.capability_matrix.target_dataset_blocked:
+                zero_reason = (
+                    "No experiment plans are launch-eligible because the exact target datasets remain blocked "
+                    "and the planner produced no fallback executable plans."
+                )
+            report = tools.preflight_experiment_plan(
+                ExperimentPlan(
+                    plan_id="__no_executable_plans__",
+                    title="No executable plans",
+                    program_id=state.selected_baseline_program_id or "none",
+                    job_kind="preflight",
+                    working_directory=state.work_directory,
+                    launch_command="true",
+                    log_path=str(tools.memory.preflight_dir / "no_executable_plans.log"),
+                    status="blocked",
+                    notes=[zero_reason],
+                ),
+                state.external_artifacts,
+                state.capability_matrix,
+            )
+            capability_matrix = tools.probe_capability_matrix(
+                artifacts=state.external_artifacts,
+                repository_paths=[repo.local_path for repo in state.repositories],
+                environment_path=state.capability_matrix.environment_path if state.capability_matrix else None,
+            )
+            output = PreflightValidationPhaseOutput(
+                summary="Preflight validated pending experiment plans. passed=0 blocked=1.",
+                preflight_reports=[report],
+                capability_matrix=capability_matrix,
+                failure_summaries=[zero_reason],
+                zero_plan_reason=zero_reason,
+                recommended_route=report.recommended_route or "acquisition",
+                next_actions=["Pivot to fallback execution or alternate acquisition strategy; do not retry the same blocked route unchanged."],
+            )
+            applied_summary = self.apply_output(state, tools, output)
+            self.record_diary(state, tools, applied_summary)
+            return applied_summary
         reports = [
             tools.preflight_experiment_plan(plan, state.external_artifacts, state.capability_matrix)
             for plan in pending_plans
@@ -153,6 +280,7 @@ class PreflightValidationAgent(BaseResearchAgent):
             preflight_reports=reports,
             capability_matrix=capability_matrix,
             failure_summaries=failure_summaries,
+            recommended_route=next((report.recommended_route for report in reports if report.recommended_route), None),
             next_actions=[
                 "Launch only preflight-passed plans."
                 if any(report.passed for report in reports)
@@ -270,6 +398,14 @@ Rules:
 - Compare against actual baseline or parent-program evidence when available.
 - Distinguish method-level gains from accidental engineering artifacts.
 - If progress is insufficient or blocked, say why and propose the next move.
+- Return machine-readable control signals inside each reflection record:
+  - recommended_route_id
+  - preferred_recovery_strategies
+  - forbidden_attempt_signatures
+  - blocked_entities
+  - material_change_required
+  - escalation_required
+- If the same infrastructure blocker repeated without new evidence, mark escalation_required or force a pivot to a different strategy.
 """
 
     def build_payload(self, state: ResearchState, tools: ResearchTools) -> dict[str, Any]:
@@ -285,6 +421,13 @@ Rules:
             "failure_summaries": state.failure_summaries[-12:],
             "classified_failures": [item.model_dump(mode="python") for item in state.classified_failures[-12:]],
             "capability_matrix": state.capability_matrix.model_dump(mode="python") if state.capability_matrix else None,
+            "blocker_registry": [item.model_dump(mode="python") for item in state.blocker_registry[-12:]],
+            "route_history": [item.model_dump(mode="python") for item in state.route_history[-8:]],
+            "cycle_deltas": [item.model_dump(mode="python") for item in state.cycle_deltas[-4:]],
+            "hitl_events": [item.model_dump(mode="python") for item in state.hitl_events[-6:]],
+            "manual_asset_roots": state.manual_asset_roots,
+            "skipped_target_entities": state.skipped_target_entities,
+            "human_guidance_notes": state.human_guidance_notes[-12:],
         }
 
     def apply_output(self, state: ResearchState, tools: ResearchTools, output: ReflectionPhaseOutput) -> str:

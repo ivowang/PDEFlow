@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 import shlex
 
-from common import short_hash, slugify
+from common import canonicalize_env_id
+from state import EnvironmentRecord, EnvironmentResolutionState
 
 
 class ManagedEnvironmentMixin:
@@ -23,7 +24,7 @@ class ManagedEnvironmentMixin:
 
         initial_root = self._resolve_path(project_path)
         project_root = self._find_project_root(initial_root)
-        environment_slug = environment_name or f"{slugify(project_root.name)}-{short_hash(str(project_root))}"
+        environment_slug = canonicalize_env_id(environment_name or project_root.name, project_hint=project_root.name)
         environment_path = self.managed_env_root / environment_slug
         python_interpreter = self._find_python_interpreter(project_root, python_spec)
         manifest_info = self.detect_project_manifests(str(project_root))
@@ -46,16 +47,38 @@ class ManagedEnvironmentMixin:
                 "environment_path": str(environment_path),
                 "python_interpreter": python_interpreter,
                 "status": "failed",
+                "state": EnvironmentResolutionState.BROKEN.value,
+                "failure_category": "create_failed",
+                "failure_reason": create_result["stderr_tail"] or create_result["stdout_tail"],
                 "manifests": sorted(manifests),
                 "strategy": dependency_strategy,
                 "attempted_commands": attempted_commands,
                 "results": results,
             }
+            self.memory.record_environment(
+                EnvironmentRecord(
+                    env_id=environment_slug,
+                    canonical_id=environment_slug,
+                    project_path=str(project_root),
+                    environment_path=str(environment_path),
+                    python_interpreter=python_interpreter,
+                    state=EnvironmentResolutionState.BROKEN,
+                    strategy=dependency_strategy,
+                    attempted_commands=attempted_commands,
+                    manifests=sorted(manifests),
+                    failure_reason=payload["failure_reason"],
+                    failure_category="create_failed",
+                )
+            )
             self._record_tool_event("ensure_python_environment", payload)
             return payload
 
         environment_python = self._environment_python(environment_path)
         strategy_used = "empty"
+        env_state = EnvironmentResolutionState.CREATING
+        failure_reason: str | None = None
+        failure_category: str | None = None
+        fallback_recipe: list[str] = []
         if "pyproject.toml" in manifests:
             sync_command = f"env VIRTUAL_ENV={shlex.quote(str(environment_path))} uv sync --project {shlex.quote(str(project_root))} --active --no-dev"
             attempted_commands.append(sync_command)
@@ -63,9 +86,14 @@ class ManagedEnvironmentMixin:
             results.append(sync_result)
             if sync_result["returncode"] == 0:
                 strategy_used = "uv_sync"
+                env_state = EnvironmentResolutionState.READY
             elif dependency_strategy in {"auto", "minimal"}:
+                env_state = EnvironmentResolutionState.SYNC_FAILED
+                failure_category = "uv_sync_failed"
+                failure_reason = sync_result["stderr_tail"] or sync_result["stdout_tail"]
                 dependencies = self._extract_pyproject_dependencies(project_root)
                 if dependencies:
+                    env_state = EnvironmentResolutionState.FALLBACK_INSTALLING
                     install_command = (
                         f"uv pip install --python {shlex.quote(str(environment_python))} "
                         + " ".join(shlex.quote(item) for item in dependencies)
@@ -74,6 +102,8 @@ class ManagedEnvironmentMixin:
                     install_result = self.run_command(install_command, cwd=project_root, allow_failure=True)
                     results.append(install_result)
                     if install_result["returncode"] == 0 and editable_install:
+                        fallback_recipe = [install_command]
+                        env_state = EnvironmentResolutionState.EDITABLE_INSTALLING
                         editable_command = (
                             f"uv pip install --python {shlex.quote(str(environment_python))} "
                             f"--editable {shlex.quote(str(project_root))} --no-deps"
@@ -83,8 +113,12 @@ class ManagedEnvironmentMixin:
                         results.append(editable_result)
                         if editable_result["returncode"] == 0:
                             strategy_used = "uv_pip_minimal_editable"
+                            env_state = EnvironmentResolutionState.READY
+                            fallback_recipe.append(editable_command)
                     elif install_result["returncode"] == 0:
                         strategy_used = "uv_pip_minimal"
+                        env_state = EnvironmentResolutionState.READY
+                        fallback_recipe = [install_command]
         elif "requirements.txt" in manifests:
             install_command = (
                 f"uv pip install --python {shlex.quote(str(environment_python))} "
@@ -95,6 +129,8 @@ class ManagedEnvironmentMixin:
             results.append(install_result)
             if install_result["returncode"] == 0:
                 strategy_used = "requirements"
+                env_state = EnvironmentResolutionState.READY
+                fallback_recipe = [install_command]
         elif "setup.py" in manifests:
             install_command = (
                 f"uv pip install --python {shlex.quote(str(environment_python))} "
@@ -105,6 +141,8 @@ class ManagedEnvironmentMixin:
             results.append(install_result)
             if install_result["returncode"] == 0:
                 strategy_used = "editable_setup"
+                env_state = EnvironmentResolutionState.READY
+                fallback_recipe = [install_command]
 
         verify_command = f"{shlex.quote(str(environment_python))} -c \"import sys; print(sys.executable); print(sys.version.split()[0])\""
         attempted_commands.append(verify_command)
@@ -124,11 +162,33 @@ class ManagedEnvironmentMixin:
             "python_interpreter": python_interpreter,
             "environment_python": str(environment_python),
             "status": "ready" if success else "failed",
+            "state": (EnvironmentResolutionState.READY if success else EnvironmentResolutionState.BROKEN).value
+            if env_state != EnvironmentResolutionState.SYNC_FAILED
+            else env_state.value,
             "manifests": sorted(manifests),
             "strategy": strategy_used,
+            "failure_reason": None if success else (failure_reason or pip_result["stderr_tail"] or verify_result["stderr_tail"]),
+            "failure_category": None if success else (failure_category or "verification_failed"),
+            "fallback_recipe": fallback_recipe,
             "attempted_commands": attempted_commands,
             "results": results,
         }
+        self.memory.record_environment(
+            EnvironmentRecord(
+                env_id=environment_slug,
+                canonical_id=environment_slug,
+                project_path=str(project_root),
+                environment_path=str(environment_path),
+                python_interpreter=python_interpreter,
+                state=EnvironmentResolutionState.READY if success else (env_state if env_state != EnvironmentResolutionState.READY else EnvironmentResolutionState.BROKEN),
+                strategy=strategy_used,
+                attempted_commands=attempted_commands,
+                manifests=sorted(manifests),
+                failure_reason=payload["failure_reason"],
+                failure_category=payload["failure_category"],
+                fallback_recipe=fallback_recipe,
+            )
+        )
         self._record_tool_event("ensure_python_environment", payload)
         return payload
 

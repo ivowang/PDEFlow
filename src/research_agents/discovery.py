@@ -62,6 +62,7 @@ You must:
 - verify that downloaded datasets, checkpoints, and repositories exist at the exact local paths needed by upcoming experiment plans
 - use the managed downloader and artifact validator instead of ad hoc `curl` or `wget` repair loops
 - for dataset artifacts, persist official checksum metadata when available and do not treat path existence as validation
+- treat manager route focus as policy, not prose. If the route focus says `local_discovery`, `mirror_resolution`, or `partial_salvage`, change strategy accordingly and do not repeat a known-bad transfer path unchanged.
 
 Rules:
 - Do not assume repository URLs, dataset locations, or checkpoint links unless a tool confirmed them.
@@ -76,13 +77,23 @@ Rules:
             "open_questions": state.open_questions[:12],
             "existing_repositories": [repo.name for repo in state.repositories],
             "failure_summaries": state.failure_summaries[-12:],
+            "blocker_registry": [item.model_dump(mode="python") for item in state.blocker_registry[-12:]],
+            "route_history": [item.model_dump(mode="python") for item in state.route_history[-6:]],
             "recent_experiment_records": [record.model_dump(mode="python") for record in state.experiment_records[-8:]],
             "existing_experiment_plans": [plan.model_dump(mode="python") for plan in state.experiment_plans[-12:]],
+            "active_route_id": state.active_route_id,
+            "active_route_focus": state.active_route_focus,
+            "hitl_events": [item.model_dump(mode="python") for item in state.hitl_events[-6:]],
+            "manual_asset_roots": state.manual_asset_roots,
+            "skipped_target_entities": state.skipped_target_entities,
+            "human_guidance_notes": state.human_guidance_notes[-12:],
             "work_directory": state.work_directory,
         }
 
     def apply_output(self, state: ResearchState, tools: ResearchTools, output: AcquisitionPhaseOutput) -> str:
         state.environment_snapshot = output.environment_snapshot
+        if output.environment_records:
+            state.environment_records = upsert_by_attr(state.environment_records, output.environment_records, "canonical_id")
         if output.capability_matrix is not None:
             state.capability_matrix = output.capability_matrix
             tools.memory.record_capability_matrix(output.capability_matrix)
@@ -95,6 +106,8 @@ Rules:
         state.next_actions = output.next_actions
         for secret in output.secret_status:
             tools.memory.record_secret_status(secret)
+        for environment in output.environment_records:
+            tools.memory.record_environment(environment)
         for artifact in output.external_artifacts:
             tools.memory.record_artifact(artifact)
         for repository in output.repositories:

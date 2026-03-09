@@ -53,6 +53,9 @@ class ExecutionConfig(BaseModel):
     auto_bootstrap_environments: bool = True
     allow_shell_commands: bool = True
     allow_package_installation: bool = True
+    hitl_enabled: bool = True
+    hitl_blocker_repeat_threshold: int = 3
+    hitl_strategy_threshold: int = 2
     work_directory: str = "runs/{run_name}"
     workspace_root: str = "external_assets"
 

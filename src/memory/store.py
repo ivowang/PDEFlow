@@ -7,18 +7,23 @@ from typing import Any
 
 from state import (
     ArtifactRecord,
+    BlockerRecord,
     CapabilityMatrix,
     ClassifiedFailure,
+    CycleDeltaRecord,
     DiaryEntry,
+    EnvironmentRecord,
     ExperimentPlan,
     ExperimentRecord,
     GeneratedReport,
+    HITLEvent,
     PaperNote,
     PreflightReport,
     ProgramCandidate,
     RepositoryRecord,
     ResearchPhase,
     ResearchState,
+    RouteDecisionRecord,
     SecretStatus,
 )
 from common import append_jsonl, ensure_dir, now_utc, to_plain_data, write_json
@@ -41,6 +46,7 @@ class ResearchMemory:
         self.diary_dir = ensure_dir(root / "diary")
         self.repositories_dir = ensure_dir(root / "repositories")
         self.artifacts_dir = ensure_dir(root / "artifacts")
+        self.environments_dir = ensure_dir(root / "environments")
         self.sessions_db = self.state_dir / "agents_sessions.sqlite"
         self.program_db_path = self.programs_dir / "program_db.sqlite3"
         self._init_program_db()
@@ -110,8 +116,14 @@ class ResearchMemory:
     def record_capability_matrix(self, capability_matrix: CapabilityMatrix) -> None:
         append_jsonl(self.state_dir / "capability_matrix.jsonl", capability_matrix)
 
+    def record_environment(self, environment: EnvironmentRecord) -> None:
+        append_jsonl(self.environments_dir / "environment_registry.jsonl", environment)
+
     def record_repository(self, repository: RepositoryRecord) -> None:
         append_jsonl(self.repositories_dir / "repository_registry.jsonl", repository)
+
+    def record_repo_resolution(self, payload: dict[str, Any]) -> None:
+        append_jsonl(self.repositories_dir / "repo_resolution_cache.jsonl", payload)
 
     def record_experiment_plan(self, plan: ExperimentPlan) -> None:
         append_jsonl(self.memory_dir / "experiment_plans.jsonl", plan)
@@ -133,6 +145,18 @@ class ResearchMemory:
 
     def record_failure(self, failure: ClassifiedFailure) -> None:
         append_jsonl(self.memory_dir / "classified_failures.jsonl", failure)
+
+    def record_hitl_event(self, event: HITLEvent) -> None:
+        append_jsonl(self.memory_dir / "hitl_events.jsonl", event)
+
+    def record_blocker(self, blocker: BlockerRecord) -> None:
+        append_jsonl(self.memory_dir / "blocker_registry.jsonl", blocker)
+
+    def record_route_decision(self, route_decision: RouteDecisionRecord) -> None:
+        append_jsonl(self.state_dir / "route_history.jsonl", route_decision)
+
+    def record_cycle_delta(self, cycle_delta: CycleDeltaRecord) -> None:
+        append_jsonl(self.state_dir / "cycle_deltas.jsonl", cycle_delta)
 
     def record_tool_event(self, payload: dict[str, Any]) -> None:
         append_jsonl(self.logs_dir / "tool_events.jsonl", payload)

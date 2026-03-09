@@ -14,5 +14,7 @@ class PhaseSpec:
 
 @dataclass(frozen=True)
 class CycleRoute:
+    route_id: str
     phases: tuple[PhaseSpec, ...]
     reason: str
+    focus: tuple[str, ...] = ()

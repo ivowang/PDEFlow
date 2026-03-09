@@ -113,6 +113,7 @@ def classify_preflight_failures(preflight_reports: Iterable[PreflightReport]) ->
         if report.passed:
             continue
         categories = {item.category for item in report.failed_checks}
+        normalized_reason = (report.blocking_reason or "").lower()
         if "dataset" in categories or "artifact" in categories:
             failures.append(
                 _make_failure(
@@ -141,6 +142,18 @@ def classify_preflight_failures(preflight_reports: Iterable[PreflightReport]) ->
                     report.plan_id,
                     f"Plan {report.plan_id} requires a missing backend.",
                     {"plan_id": report.plan_id},
+                )
+            )
+        if report.plan_id == "__no_executable_plans__" and (
+            "dataset" in normalized_reason or "blocked" in normalized_reason
+        ):
+            failures.append(
+                _make_failure(
+                    "plan_depends_on_blocked_artifact",
+                    "preflight_validation",
+                    report.plan_id,
+                    report.blocking_reason or "No executable plans remain because blocked artifacts prevent launch.",
+                    {"plan_id": report.plan_id, "recommended_route": report.recommended_route},
                 )
             )
     return failures

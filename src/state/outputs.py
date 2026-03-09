@@ -8,6 +8,7 @@ from .entities import (
     ArtifactRecord,
     CapabilityMatrix,
     CandidateDirection,
+    EnvironmentRecord,
     EnvironmentSnapshot,
     ExperimentPlan,
     ExperimentRecord,
@@ -36,6 +37,7 @@ class LiteraturePhaseOutput(BaseModel):
 class AcquisitionPhaseOutput(BaseModel):
     summary: str
     environment_snapshot: EnvironmentSnapshot
+    environment_records: list[EnvironmentRecord] = Field(default_factory=list)
     capability_matrix: CapabilityMatrix | None = None
     secret_status: list[SecretStatus] = Field(default_factory=list)
     external_artifacts: list[ArtifactRecord] = Field(default_factory=list)
@@ -91,6 +93,8 @@ class PreflightValidationPhaseOutput(BaseModel):
     preflight_reports: list[PreflightReport]
     capability_matrix: CapabilityMatrix | None = None
     failure_summaries: list[str] = Field(default_factory=list)
+    zero_plan_reason: str | None = None
+    recommended_route: str | None = None
     next_actions: list[str] = Field(default_factory=list)
 
 

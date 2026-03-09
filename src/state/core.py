@@ -11,11 +11,15 @@ from .entities import (
     CapabilityMatrix,
     CandidateDirection,
     ClassifiedFailure,
+    BlockerRecord,
+    CycleDeltaRecord,
     DiaryEntry,
+    EnvironmentRecord,
     EnvironmentSnapshot,
     ExperimentPlan,
     ExperimentRecord,
     GeneratedReport,
+    HITLEvent,
     HypothesisRecord,
     MethodDesign,
     PaperNote,
@@ -23,6 +27,7 @@ from .entities import (
     ProgramCandidate,
     ReflectionRecord,
     RepositoryRecord,
+    RouteDecisionRecord,
     SecretStatus,
     TaxonomyEntry,
 )
@@ -40,6 +45,7 @@ class ResearchPhase(str, Enum):
     PREFLIGHT_VALIDATION = "preflight_validation"
     EXPERIMENT = "experiment"
     REFLECTION = "reflection"
+    HUMAN_INTERVENTION = "human_intervention"
     REPORTING = "reporting"
 
 
@@ -52,6 +58,7 @@ class ResearchState(BaseModel):
     phase_history: list[str] = Field(default_factory=list)
     cycle_index: int = 0
     environment_snapshot: EnvironmentSnapshot | None = None
+    environment_records: list[EnvironmentRecord] = Field(default_factory=list)
     capability_matrix: CapabilityMatrix | None = None
     secret_status: list[SecretStatus] = Field(default_factory=list)
     literature_notes: list[PaperNote] = Field(default_factory=list)
@@ -75,10 +82,20 @@ class ResearchState(BaseModel):
     best_known_results: dict[str, dict[str, Any]] = Field(default_factory=dict)
     failure_summaries: list[str] = Field(default_factory=list)
     classified_failures: list[ClassifiedFailure] = Field(default_factory=list)
+    blocker_registry: list[BlockerRecord] = Field(default_factory=list)
+    route_history: list[RouteDecisionRecord] = Field(default_factory=list)
+    cycle_deltas: list[CycleDeltaRecord] = Field(default_factory=list)
     reflections: list[ReflectionRecord] = Field(default_factory=list)
+    hitl_events: list[HITLEvent] = Field(default_factory=list)
+    human_guidance_notes: list[str] = Field(default_factory=list)
+    manual_asset_roots: list[str] = Field(default_factory=list)
+    skipped_target_entities: list[str] = Field(default_factory=list)
     semantic_memory_notes: list[str] = Field(default_factory=list)
     research_diary: list[DiaryEntry] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
     generated_reports: list[GeneratedReport] = Field(default_factory=list)
+    active_route_id: str | None = None
+    active_route_reason: str | None = None
+    active_route_focus: list[str] = Field(default_factory=list)
     termination_decision: str | None = None
     blocked_reason: str | None = None

@@ -35,6 +35,10 @@ class PreflightValidationMixin:
                     return path.resolve()
         return None
 
+    def _is_inline_python(self, command: str) -> bool:
+        stripped = command.strip()
+        return "python - <<" in stripped or "python -c " in stripped or stripped.startswith("python - <<")
+
     def _infer_environment_path(self, plan: ExperimentPlan, capability_matrix: CapabilityMatrix | None) -> str | None:
         if plan.environment.get("VIRTUAL_ENV"):
             return plan.environment["VIRTUAL_ENV"]
@@ -94,6 +98,14 @@ class PreflightValidationMixin:
         checks: list[PreflightCheckResult] = []
         related_artifact_ids = list(plan.required_artifact_ids)
         if plan.job_kind != "experiment":
+            recommended_route = plan.job_kind
+            if plan.plan_id == "__no_executable_plans__":
+                if capability_matrix and capability_matrix.fallback_assets_available:
+                    recommended_route = "fallback_execution"
+                elif capability_matrix and capability_matrix.target_dataset_blocked:
+                    recommended_route = "acquisition"
+                else:
+                    recommended_route = "planning"
             return PreflightReport(
                 report_id=f"preflight-{short_hash(plan.plan_id, now_utc())}",
                 plan_id=plan.plan_id,
@@ -107,13 +119,22 @@ class PreflightValidationMixin:
                         details=f"Non-experiment job kind {plan.job_kind} must stay outside experiment launch.",
                     )
                 ],
-                blocking_reason="plan is not an actual experiment",
-                recommended_route=plan.job_kind,
+                blocking_reason=plan.notes[0] if plan.notes else "plan is not an actual experiment",
+                recommended_route=recommended_route,
                 related_artifact_ids=related_artifact_ids,
             )
 
         entrypoint = self._infer_entrypoint(plan)
-        if entrypoint is None:
+        if entrypoint is None and self._is_inline_python(plan.launch_command):
+            checks.append(
+                PreflightCheckResult(
+                    name="entrypoint_inline_python",
+                    passed=True,
+                    category="import",
+                    details="Inline Python fallback experiment does not require a file entrypoint.",
+                )
+            )
+        elif entrypoint is None:
             checks.append(
                 PreflightCheckResult(
                     name="entrypoint_exists",
@@ -260,6 +281,8 @@ class PreflightValidationMixin:
                 "plan_id": plan.plan_id,
                 "passed": passed,
                 "failed_checks": [item.name for item in failed_checks],
+                "blocking_reason": blocking_reason,
+                "recommended_route": recommended_route,
             },
         )
         return report

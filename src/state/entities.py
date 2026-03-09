@@ -53,6 +53,18 @@ class EnvironmentSnapshot(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class AssetSemanticSpec(BaseModel):
+    benchmark: str | None = None
+    asset_family: str | None = None
+    equation: str | None = None
+    split: str | None = None
+    variant: str | None = None
+    nu: str | None = None
+    rho: str | None = None
+    filename: str | None = None
+    source_kind: str | None = None
+
+
 class ArtifactStatus(str, Enum):
     DOWNLOADED = "downloaded"
     CHECKSUM_VERIFIED = "checksum_verified"
@@ -95,7 +107,11 @@ class ArtifactValidationResult(BaseModel):
 
 class ArtifactDownloadMetadata(BaseModel):
     source_url: str | None = None
+    source_type: str | None = None
     local_path: str | None = None
+    canonical_target_id: str | None = None
+    strategy_id: str | None = None
+    attempt_signature: str | None = None
     download_timestamp: str = Field(default_factory=now_utc)
     file_size: int = 0
     checksum: ArtifactChecksumRecord | None = None
@@ -112,6 +128,8 @@ class ArtifactDownloadMetadata(BaseModel):
 
 class ArtifactRecord(BaseModel):
     artifact_id: str
+    canonical_id: str | None = None
+    raw_aliases: list[str] = Field(default_factory=list)
     artifact_type: str
     title: str
     rationale: str
@@ -119,6 +137,7 @@ class ArtifactRecord(BaseModel):
     source_url: str | None = None
     local_path: str | None = None
     status: str
+    semantic_spec: AssetSemanticSpec | None = None
     validation: ArtifactValidationResult | None = None
     download_metadata: ArtifactDownloadMetadata | None = None
     quarantine_path: str | None = None
@@ -128,14 +147,45 @@ class ArtifactRecord(BaseModel):
 
 class RepositoryRecord(BaseModel):
     repo_id: str
+    canonical_id: str | None = None
+    raw_aliases: list[str] = Field(default_factory=list)
     name: str
     remote_url: str
     local_path: str
     bootstrap_status: str = "uninitialized"
     environment_path: str | None = None
+    environment_id: str | None = None
+    resolution_source: str | None = None
     detected_manifests: list[str] = Field(default_factory=list)
     entrypoints: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+
+
+class EnvironmentResolutionState(str, Enum):
+    NOT_STARTED = "not_started"
+    CREATING = "creating"
+    SYNC_FAILED = "sync_failed"
+    FALLBACK_INSTALLING = "fallback_installing"
+    EDITABLE_INSTALLING = "editable_installing"
+    READY = "ready"
+    BROKEN = "broken"
+
+
+class EnvironmentRecord(BaseModel):
+    env_id: str
+    canonical_id: str
+    project_path: str
+    environment_path: str
+    repo_id: str | None = None
+    python_interpreter: str | None = None
+    state: EnvironmentResolutionState = EnvironmentResolutionState.NOT_STARTED
+    strategy: str | None = None
+    attempted_commands: list[str] = Field(default_factory=list)
+    manifests: list[str] = Field(default_factory=list)
+    failure_reason: str | None = None
+    failure_category: str | None = None
+    fallback_recipe: list[str] = Field(default_factory=list)
+    updated_at: str = Field(default_factory=now_utc)
 
 
 class CandidateDirection(BaseModel):
@@ -280,6 +330,13 @@ class ClassifiedFailure(BaseModel):
 
 class CapabilityMatrix(BaseModel):
     environment_path: str | None = None
+    repo_ready: bool = False
+    env_ready: bool = False
+    codepath_ready: bool = False
+    dataset_ready: bool = False
+    baseline_launch_ready: bool = False
+    experiment_plan_ready: bool = False
+    scientific_iteration_ready: bool = False
     python_available: bool = False
     pip_available: bool = False
     torch_available: bool = False
@@ -302,6 +359,45 @@ class CapabilityMatrix(BaseModel):
     generated_at: str = Field(default_factory=now_utc)
 
 
+class BlockerRecord(BaseModel):
+    blocker_id: str
+    blocker_type: str
+    target_entity: str
+    first_seen_cycle: int
+    last_seen_cycle: int
+    repeat_count: int = 1
+    last_attempt_signature: str | None = None
+    evidence_summary: str = ""
+    recovery_strategies_tried: list[str] = Field(default_factory=list)
+    terminality: str = "temporary"
+    route_exhausted: bool = False
+    blocked_route_ids: list[str] = Field(default_factory=list)
+    recommended_pivots: list[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=now_utc)
+    updated_at: str = Field(default_factory=now_utc)
+
+
+class RouteDecisionRecord(BaseModel):
+    cycle_index: int
+    route_id: str
+    rationale: str
+    blockers_considered: list[str] = Field(default_factory=list)
+    allowed: bool = True
+    material_change_summary: list[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=now_utc)
+
+
+class CycleDeltaRecord(BaseModel):
+    cycle_index: int
+    snapshot_signature: str
+    changed: bool = False
+    summary: list[str] = Field(default_factory=list)
+    newly_ready_artifacts: list[str] = Field(default_factory=list)
+    newly_blocked_artifacts: list[str] = Field(default_factory=list)
+    newly_ready_environments: list[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=now_utc)
+
+
 class ReflectionRecord(BaseModel):
     reflection_id: str
     cycle_index: int
@@ -311,9 +407,50 @@ class ReflectionRecord(BaseModel):
     linked_failure_ids: list[str] = Field(default_factory=list)
     accepted_lessons: list[str] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
+    recommended_route_id: str | None = None
+    preferred_recovery_strategies: list[str] = Field(default_factory=list)
+    forbidden_attempt_signatures: list[str] = Field(default_factory=list)
+    blocked_entities: list[str] = Field(default_factory=list)
+    material_change_required: bool = False
+    escalation_required: bool = False
+    failure_category: str | None = None
     continue_research: bool = False
     stop_reason: str | None = None
     created_at: str = Field(default_factory=now_utc)
+
+
+class HumanResponseType(str, Enum):
+    CONFIRMED_DONE = "confirmed_done"
+    INSTRUCTION = "instruction"
+    REDUCE_SCOPE = "reduce_scope"
+    ABORT = "abort"
+
+
+class HITLStatus(str, Enum):
+    REQUESTED = "requested"
+    RESPONDED = "responded"
+    REVALIDATED = "revalidated"
+    RESUMED = "resumed"
+    STILL_BLOCKED = "still_blocked"
+    ABORTED = "aborted"
+
+
+class HITLEvent(BaseModel):
+    event_id: str
+    cycle_index: int
+    blocker_ids: list[str] = Field(default_factory=list)
+    blocker_type: str
+    target_entities: list[str] = Field(default_factory=list)
+    escalation_reason: str
+    requested_actions: list[str] = Field(default_factory=list)
+    prompt_text: str
+    response_type: HumanResponseType | None = None
+    response_text: str | None = None
+    validation_summary: list[str] = Field(default_factory=list)
+    status: HITLStatus = HITLStatus.REQUESTED
+    material_effect: str | None = None
+    created_at: str = Field(default_factory=now_utc)
+    responded_at: str | None = None
 
 
 class GeneratedReport(BaseModel):

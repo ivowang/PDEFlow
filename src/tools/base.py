@@ -47,8 +47,13 @@ class ToolContext:
             return f"Fetched remote text from {payload.get('url', '')}."
         if tool_name == "download_file":
             status = payload.get("validation_status")
+            strategy = payload.get("strategy_id")
+            attempt = payload.get("attempt_signature")
             if status:
-                return f"Downloaded file to {payload.get('path', '')}. validation_status={status}."
+                return (
+                    f"Downloaded file to {payload.get('path', '')}. validation_status={status}. "
+                    f"strategy_id={strategy or 'unknown'} attempt_signature={attempt or 'unknown'}."
+                )
             return f"Downloaded file to {payload.get('path', '')}."
         if tool_name == "validate_artifact":
             return (
@@ -58,13 +63,16 @@ class ToolContext:
         if tool_name == "probe_capability_matrix":
             return (
                 "Capability probe finished. "
+                f"repo_ready={payload.get('repo_ready', False)} "
+                f"env_ready={payload.get('env_ready', False)} "
                 f"baseline_ready={payload.get('baseline_ready_to_launch', False)} "
                 f"target_dataset_ready={payload.get('target_dataset_ready', False)}."
             )
         if tool_name == "preflight_experiment_plan":
             return (
                 f"Preflight finished for {payload.get('plan_id', '')}: "
-                f"passed={payload.get('passed', False)}."
+                f"passed={payload.get('passed', False)} "
+                f"recommended_route={payload.get('recommended_route', 'none')}."
             )
         if tool_name == "extract_pdf_text":
             return f"Extracted PDF text from {payload.get('path', '')}."

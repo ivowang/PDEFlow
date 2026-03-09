@@ -2,7 +2,7 @@
 
 `PDEFlow` is a manager-centered autonomous research system for PDE neural operator research.
 
-You provide a research problem in config. The system then autonomously runs literature review, asset acquisition, planning, preflight validation, experiments, reflection, and reporting with real tools.
+You provide a research problem in config. The system then autonomously runs literature review, asset acquisition, planning, preflight validation, experiments, reflection, human-in-the-loop escalation when needed, and reporting with real tools.
 
 ## Quick Start
 
@@ -93,7 +93,8 @@ The manager uses these phases:
 9. `preflight_validation`
 10. `experiment`
 11. `reflection`
-12. `reporting`
+12. `human_intervention`
+13. `reporting`
 
 The design is manager-centered. Specialist agents do not freely chat with each other; they operate through shared state and tools.
 
@@ -101,6 +102,7 @@ The phase vocabulary is fixed, but the cycle route is dynamic:
 
 - normal route: `hypothesis -> method_design -> coding -> experiment_planning -> preflight_validation -> experiment -> reflection`
 - recovery route: if the manager detects a hard blocker such as corrupted data, blocked artifacts, failed transfers, missing checkpoints, repo/bootstrap failure, or invalid environment state, it routes back through `acquisition -> experiment_planning -> preflight_validation -> reflection`
+- HITL route: if the same blocker persists after repeated autonomous recovery attempts, the manager enters `human_intervention`, prints an actionable terminal request, waits for human input, and only resumes after the response materially changes state
 
 This prevents the system from continuing with useless downstream steps after a prerequisite has failed.
 
@@ -108,6 +110,15 @@ Two reliability rules are now hard-gated:
 
 - dataset and checkpoint artifacts must be `ready_for_training` before planning or launch
 - real experiment launch only happens after `preflight_validation` passes for the exact plan
+
+If a blocker is exhausted rather than recoverable, PDEFlow does not silently retry forever. It can escalate to HITL, asking the user to:
+
+- confirm that files have been manually provided
+- give a new local path or alternate instruction
+- skip a blocked target and continue with reduced scope
+- abort the run
+
+Manual confirmation is never trusted blindly. The system re-scans and re-validates files before resuming.
 
 ## Outputs
 
@@ -120,6 +131,7 @@ Run artifacts are written under `execution.work_directory`:
 - `programs/`: program lineage database
 - `artifacts/`: artifact registry with validation/checksum metadata
 - `preflight/`: preflight reports for concrete experiment plans
+- `memory/hitl_events.jsonl`: structured human-intervention requests, responses, and re-validation outcomes
 - `experiments/`: experiment records and logs
 - `reports/`: generated markdown reports
 - `workspaces/`: child program workspaces
@@ -162,6 +174,7 @@ Live progress is also written to `<work_directory>/process.txt` and printed to t
 - Artifact validation includes file existence, minimum-size checks, optional official checksum comparison, and HDF5 format validation. Corrupted files can be quarantined automatically.
 - Large downloads use `.part` files, bounded retry/resume behavior, and post-download validation instead of treating path existence as success.
 - The capability matrix and classified failure state are persisted in run state so repeated cycles do not rediscover the same blockers from scratch.
+- Repeated unresolved blockers can trigger first-class human-in-the-loop escalation in the terminal; the manager records the request, waits for input, and consumes the response on the next step instead of continuing silent retry loops.
 - Acquisition/repair work, preflight checks, and real experiments are tracked separately so experiment history is not polluted by data-repair attempts.
 - The current repository is live-only. There is no mock runtime.
 - The system can create and repair managed `uv` environments under the run work directory instead of relying on a pre-existing project `venv`.
