@@ -68,6 +68,31 @@ class ResearchTools(
             return self.search_github_repositories(query, max_results=max_results)
 
         @function_tool
+        def discover_local_artifacts(
+            query: str,
+            search_roots: list[str] | None = None,
+            artifact_type: str = "dataset",
+            canonical_target_id: str | None = None,
+            expected_checksum: str | None = None,
+            checksum_algorithm: str = "md5",
+            min_size_bytes: int | None = None,
+            required_keys: list[str] | None = None,
+            limit: int = 20,
+        ) -> list[dict[str, Any]]:
+            """Search managed local roots for already-present artifacts before attempting remote download."""
+            return self.discover_local_artifacts(
+                query=query,
+                search_roots=search_roots,
+                artifact_type=artifact_type,
+                canonical_target_id=canonical_target_id,
+                expected_checksum=expected_checksum,
+                checksum_algorithm=checksum_algorithm,
+                min_size_bytes=min_size_bytes,
+                required_keys=required_keys,
+                limit=limit,
+            )
+
+        @function_tool
         def fetch_url_text(url: str, max_chars: int = 20000) -> dict[str, Any]:
             """Fetch text content from a remote URL such as a README, docs page, or dataset page."""
             return self.fetch_url_text(url, max_chars=max_chars)
@@ -165,6 +190,7 @@ class ResearchTools(
             python_spec: str | None = None,
             dependency_strategy: str = "auto",
             editable_install: bool = True,
+            require_gpu_runtime: bool = True,
         ) -> dict[str, Any]:
             """Create or repair a managed uv environment for a project inside the current research work directory."""
             return self.ensure_python_environment(
@@ -173,6 +199,7 @@ class ResearchTools(
                 python_spec=python_spec,
                 dependency_strategy=dependency_strategy,
                 editable_install=editable_install,
+                require_gpu_runtime=require_gpu_runtime,
             )
 
         @function_tool
@@ -290,6 +317,7 @@ class ResearchTools(
             "inspect_compute_environment": inspect_compute_environment,
             "search_arxiv_papers": search_arxiv_papers,
             "search_github_repositories": search_github_repositories,
+            "discover_local_artifacts": discover_local_artifacts,
             "fetch_url_text": fetch_url_text,
             "download_file": download_file,
             "compute_file_checksum": compute_file_checksum,

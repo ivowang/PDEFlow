@@ -98,6 +98,17 @@ The manager uses these phases:
 
 The design is manager-centered. Specialist agents do not freely chat with each other; they operate through shared state and tools.
 
+The current agent surface is intentionally compact:
+
+- `LiteratureAgent`: literature retrieval and paper-note synthesis
+- `AcquisitionAgent`: repositories, datasets, checkpoints, and environment/bootstrap work
+- `ResearchStrategistAgent`: `problem_framing`, `diagnosis`, `hypothesis`, and `method_design`
+- `EngineeringAgent`: `coding` and `experiment_planning`
+- `EvaluationAgent`: `preflight_validation`, `experiment`, and `reflection`
+- `ReporterAgent`: report generation
+
+This keeps the workflow explicit while avoiding an over-fragmented agent graph.
+
 The phase vocabulary is fixed, but the cycle route is dynamic:
 
 - normal route: `hypothesis -> method_design -> coding -> experiment_planning -> preflight_validation -> experiment -> reflection`
@@ -127,6 +138,12 @@ Run artifacts are written under `execution.work_directory`:
 - `state/`: structured state snapshots
 - `logs/`: unified logging system output
 - `memory/`: episodic, semantic, and idea memory
+- `memory/episodes/`: per-phase and per-cycle natural-language diary notes
+- `memory/evaluations/`: natural-language evaluation memos written after preflight and experiment
+- `memory/reflections/`: reflection summaries from the latest cycle
+- `memory/lessons/`: reusable lessons extracted from failures and successes
+- `memory/strategy/`: natural-language strategy guidance for later cycles
+- `memory/evolution/`: explicit “what should change next” notes for self-evolution
 - `literature/`: paper notes
 - `programs/`: program lineage database
 - `artifacts/`: artifact registry with validation/checksum metadata
@@ -150,6 +167,8 @@ The intended convention is that all research content for a run stays inside the 
 - experiment logs and outputs
 - state snapshots and memory
 - research reports
+
+The self-evolving loop is memory-backed. After preflight and experiment, PDEFlow writes human-readable evaluation memos. After reflection, it writes reflection, lesson, strategy, and evolution notes. Those notes are reloaded into shared state on later cycles and fed back into strategist, engineering, and evaluation phases so the system can avoid repeating dead ends and build on prior evidence.
 
 The unified logging system maintains three main granularities:
 
@@ -189,6 +208,7 @@ Additional structured streams remain under `logs/` where useful, such as:
 - Repeated unresolved blockers can trigger first-class human-in-the-loop escalation in the terminal; the manager records the request, waits for input, and consumes the response on the next step instead of continuing silent retry loops.
 - Acquisition/repair work, preflight checks, and real experiments are tracked separately so experiment history is not polluted by data-repair attempts.
 - Logging is unified under one logger that emits core scientific progress logs, agent activity logs, and full debug traces while still mirroring the live stream to `process.txt`.
+- Evaluation and reflection are now first-class memory producers. The system persists natural-language evaluation memos, lessons, and evolution guidance under `memory/` and reloads them into the next cycle’s planning context.
 - The current repository is live-only. There is no mock runtime.
 - The system can create and repair managed `uv` environments under the run work directory instead of relying on a pre-existing project `venv`.
 - The system uses real shell commands, downloads, repo cloning, and environment setup, so it should be run on a controlled research machine.

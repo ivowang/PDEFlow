@@ -6,6 +6,7 @@ import sqlite3
 from typing import Any
 
 from state import (
+    AssetSemanticSpec,
     ArtifactRecord,
     BlockerRecord,
     CapabilityMatrix,
@@ -15,8 +16,11 @@ from state import (
     EnvironmentRecord,
     ExperimentPlan,
     ExperimentRecord,
+    EvaluationMemo,
     GeneratedReport,
     HITLEvent,
+    MemoryKind,
+    MemoryNote,
     PaperNote,
     PreflightReport,
     ProgramCandidate,
@@ -26,9 +30,137 @@ from state import (
     RouteDecisionRecord,
     SecretStatus,
 )
-from common import append_jsonl, ensure_dir, now_utc, to_plain_data, write_json
+from common import (
+    append_jsonl,
+    canonicalize_artifact_id,
+    choose_preferred_identifier,
+    ensure_dir,
+    now_utc,
+    to_plain_data,
+    write_json,
+)
 from common import read_jsonl
 from .logging import ResearchLogger
+
+
+_ARTIFACT_STATUS_PRIORITY = {
+    "ready_for_training": 7,
+    "format_verified": 6,
+    "checksum_verified": 5,
+    "downloaded": 4,
+    "verified_local": 4,
+    "verified_remote": 4,
+    "blocked": 3,
+    "download_failed": 2,
+    "corrupted": 1,
+    "quarantined": 0,
+}
+
+
+def _normalize_loaded_artifacts(
+    records: list[ArtifactRecord],
+    *,
+    preferred_root: Path | None = None,
+) -> list[ArtifactRecord]:
+    grouped: dict[str, list[ArtifactRecord]] = {}
+    path_to_group: dict[str, str] = {}
+    for item in records:
+        semantic_payload = (
+            item.semantic_spec.model_dump(exclude_none=True)
+            if item.semantic_spec is not None
+            else {}
+        )
+        canonical_id, semantic_spec = canonicalize_artifact_id(
+            item.canonical_id or item.artifact_id,
+            local_path=item.local_path,
+            title=item.title,
+            metadata={
+                **semantic_payload,
+                **item.metadata,
+                **({"source_url": item.source_url} if item.source_url else {}),
+            },
+            artifact_type=item.artifact_type,
+        )
+        normalized = item.model_copy(
+            update={
+                "canonical_id": canonical_id,
+                "raw_aliases": sorted(set([item.artifact_id, canonical_id, *item.raw_aliases])),
+                "semantic_spec": AssetSemanticSpec.model_validate(semantic_spec),
+            }
+        )
+        group_key = canonical_id
+        if normalized.local_path:
+            path_key = str(Path(normalized.local_path).absolute())
+            group_key = path_to_group.get(path_key, group_key)
+            path_to_group[path_key] = group_key
+        grouped.setdefault(group_key, []).append(normalized)
+
+    merged: list[ArtifactRecord] = []
+    for canonical_id, items in grouped.items():
+        chosen = max(
+            items,
+            key=lambda item: (
+                _ARTIFACT_STATUS_PRIORITY.get(item.status, -1),
+                int(bool(item.validation and item.validation.ready_for_training)),
+                int(bool(item.local_path)),
+                int(
+                    (item.validation.size_bytes if item.validation else 0)
+                    or (item.download_metadata.file_size if item.download_metadata else 0)
+                    or 0
+                ),
+            ),
+        )
+        aliases = sorted({alias for item in items for alias in [item.artifact_id, canonical_id, *item.raw_aliases] if alias})
+        metadata = dict(chosen.metadata)
+        semantic_payload = (
+            chosen.semantic_spec.model_dump(exclude_none=True)
+            if chosen.semantic_spec is not None
+            else {}
+        )
+        local_paths = [item.local_path for item in items if item.local_path]
+        source_urls = [item.source_url for item in items if item.source_url]
+        download_candidates = [item.download_metadata for item in items if item.download_metadata is not None]
+        for item in items:
+            metadata.update({key: value for key, value in item.metadata.items() if value not in (None, "", [], {})})
+            if item.semantic_spec is not None:
+                semantic_payload.update(
+                    {
+                        key: value
+                        for key, value in item.semantic_spec.model_dump(exclude_none=True).items()
+                        if value not in (None, "", [], {})
+                    }
+                )
+        def _path_score(path: str | None) -> tuple[int, int, int]:
+            if not path:
+                return (-1, -1, -1)
+            resolved = Path(path).resolve()
+            exists = int(resolved.exists())
+            preferred = int(preferred_root is not None and str(resolved).startswith(str(preferred_root.resolve())))
+            return (exists, preferred, len(path))
+
+        merged.append(
+            chosen.model_copy(
+                update={
+                    "artifact_id": choose_preferred_identifier(aliases),
+                    "canonical_id": canonical_id,
+                    "raw_aliases": aliases,
+                    "metadata": metadata,
+                    "semantic_spec": AssetSemanticSpec.model_validate(semantic_payload),
+                    "local_path": max(local_paths, key=_path_score, default=chosen.local_path),
+                    "source_url": source_urls[0] if source_urls else chosen.source_url,
+                    "download_metadata": max(
+                        download_candidates,
+                        key=lambda item: (
+                            int(bool(item.checksum and item.checksum.matched is True)),
+                            int(bool(item.local_path)),
+                            int(item.file_size or 0),
+                        ),
+                        default=chosen.download_metadata,
+                    ),
+                }
+            )
+        )
+    return sorted(merged, key=lambda item: item.canonical_id or item.artifact_id)
 
 
 class ResearchMemory:
@@ -42,6 +174,13 @@ class ResearchMemory:
         self.command_logs_dir = ensure_dir(self.logs_dir / "commands")
         self.logger = ResearchLogger(root=self.root, logs_dir=self.logs_dir, process_path=self.process_path)
         self.memory_dir = ensure_dir(root / "memory")
+        self.memory_index_dir = ensure_dir(self.memory_dir / "index")
+        self.memory_episodes_dir = ensure_dir(self.memory_dir / "episodes")
+        self.memory_evaluations_dir = ensure_dir(self.memory_dir / "evaluations")
+        self.memory_reflections_dir = ensure_dir(self.memory_dir / "reflections")
+        self.memory_lessons_dir = ensure_dir(self.memory_dir / "lessons")
+        self.memory_strategy_dir = ensure_dir(self.memory_dir / "strategy")
+        self.memory_evolution_dir = ensure_dir(self.memory_dir / "evolution")
         self.literature_dir = ensure_dir(root / "literature")
         self.reports_dir = ensure_dir(root / "reports")
         self.programs_dir = ensure_dir(root / "programs")
@@ -152,6 +291,153 @@ class ResearchMemory:
     def record_report(self, report: GeneratedReport) -> None:
         append_jsonl(self.reports_dir / "generated_reports.jsonl", report)
 
+    def _memory_kind_dir(self, kind: MemoryKind) -> Path:
+        mapping = {
+            MemoryKind.EPISODE: self.memory_episodes_dir,
+            MemoryKind.EVALUATION: self.memory_evaluations_dir,
+            MemoryKind.REFLECTION: self.memory_reflections_dir,
+            MemoryKind.LESSON: self.memory_lessons_dir,
+            MemoryKind.STRATEGY: self.memory_strategy_dir,
+            MemoryKind.EVOLUTION: self.memory_evolution_dir,
+        }
+        return mapping[kind]
+
+    def _render_memory_note(self, note: MemoryNote) -> str:
+        tag_text = ", ".join(note.tags) if note.tags else "none"
+        related_text = (
+            "\n".join(f"- {key}: {value}" for key, value in sorted(note.related_ids.items()))
+            if note.related_ids
+            else "- none"
+        )
+        return (
+            f"# {note.title}\n\n"
+            f"- kind: {note.kind.value}\n"
+            f"- cycle: {note.cycle_index}\n"
+            f"- phase: {note.phase or 'n/a'}\n"
+            f"- created_at: {note.created_at}\n"
+            f"- tags: {tag_text}\n\n"
+            "## Summary\n\n"
+            f"{note.summary}\n\n"
+            "## Details\n\n"
+            f"{note.body}\n\n"
+            "## Related IDs\n\n"
+            f"{related_text}\n"
+        )
+
+    def record_memory_note(self, note: MemoryNote) -> MemoryNote:
+        directory = self._memory_kind_dir(note.kind)
+        path = directory / f"{note.note_id}.md"
+        path.write_text(self._render_memory_note(note), encoding="utf-8")
+        stored = note.model_copy(update={"path": str(path)})
+        append_jsonl(self.memory_index_dir / "memory_index.jsonl", stored)
+        append_jsonl(self.memory_dir / f"{note.kind.value}_notes.jsonl", stored)
+        return stored
+
+    def load_memory_notes(
+        self,
+        *,
+        kinds: list[MemoryKind] | None = None,
+        limit: int | None = None,
+    ) -> list[MemoryNote]:
+        notes = [
+            MemoryNote.model_validate(item)
+            for item in read_jsonl(self.memory_index_dir / "memory_index.jsonl")
+        ]
+        if kinds is not None:
+            allowed = {kind.value for kind in kinds}
+            notes = [note for note in notes if note.kind.value in allowed]
+        notes.sort(key=lambda note: note.created_at)
+        if limit is not None:
+            notes = notes[-limit:]
+        return notes
+
+    def _render_evaluation_memo(self, memo: EvaluationMemo) -> str:
+        metrics_text = (
+            "\n".join(f"- {key}: {value}" for key, value in sorted(memo.metrics.items()))
+            if memo.metrics
+            else "- none"
+        )
+        findings_text = "\n".join(f"- {item}" for item in memo.findings) if memo.findings else "- none"
+        failures_text = "\n".join(f"- {item}" for item in memo.failure_modes) if memo.failure_modes else "- none"
+        actions_text = (
+            "\n".join(f"- {item}" for item in memo.recommended_actions)
+            if memo.recommended_actions
+            else "- none"
+        )
+        return (
+            f"# {memo.summary}\n\n"
+            f"- cycle: {memo.cycle_index}\n"
+            f"- phase: {memo.phase}\n"
+            f"- verdict: {memo.verdict}\n"
+            f"- support_level: {memo.support_level}\n"
+            f"- experiment_id: {memo.experiment_id or 'n/a'}\n"
+            f"- plan_id: {memo.plan_id or 'n/a'}\n"
+            f"- program_id: {memo.program_id or 'n/a'}\n"
+            f"- hypothesis_id: {memo.hypothesis_id or 'n/a'}\n"
+            f"- compared_to: {memo.compared_to or 'n/a'}\n"
+            f"- created_at: {memo.created_at}\n\n"
+            "## Evaluation\n\n"
+            f"{memo.body}\n\n"
+            "## Metrics\n\n"
+            f"{metrics_text}\n\n"
+            "## Findings\n\n"
+            f"{findings_text}\n\n"
+            "## Failure Modes\n\n"
+            f"{failures_text}\n\n"
+            "## Recommended Actions\n\n"
+            f"{actions_text}\n"
+        )
+
+    def record_evaluation_memo(self, memo: EvaluationMemo) -> tuple[EvaluationMemo, MemoryNote]:
+        path = self.memory_evaluations_dir / f"{memo.memo_id}.md"
+        path.write_text(self._render_evaluation_memo(memo), encoding="utf-8")
+        stored = memo.model_copy(update={"path": str(path)})
+        append_jsonl(self.memory_index_dir / "evaluation_index.jsonl", stored)
+        append_jsonl(self.memory_dir / "evaluation_memos.jsonl", stored)
+        note = MemoryNote(
+            note_id=stored.memo_id,
+            kind=MemoryKind.EVALUATION,
+            title=stored.summary,
+            summary=stored.summary,
+            body=stored.body,
+            cycle_index=stored.cycle_index,
+            phase=stored.phase,
+            tags=["evaluation", stored.verdict, stored.support_level],
+            related_ids={
+                key: value
+                for key, value in {
+                    "experiment_id": stored.experiment_id,
+                    "plan_id": stored.plan_id,
+                    "program_id": stored.program_id,
+                    "hypothesis_id": stored.hypothesis_id,
+                }.items()
+                if value
+            },
+        )
+        stored_note = self.record_memory_note(note)
+        return stored, stored_note
+
+    def load_evaluation_memos(self, limit: int | None = None) -> list[EvaluationMemo]:
+        sources = [
+            self.memory_index_dir / "evaluation_index.jsonl",
+            self.memory_dir / "evaluation_memos.jsonl",
+            self.memory_dir / "evaluations.jsonl",
+        ]
+        latest: dict[str, EvaluationMemo] = {}
+        for source in sources:
+            for item in read_jsonl(source):
+                if not isinstance(item, dict):
+                    continue
+                if "memo_id" not in item or "verdict" not in item or "support_level" not in item:
+                    continue
+                memo = EvaluationMemo.model_validate(item)
+                latest[memo.memo_id] = memo
+        memos = list(latest.values())
+        memos.sort(key=lambda memo: memo.created_at)
+        if limit is not None:
+            memos = memos[-limit:]
+        return memos
+
     def record_failure(self, failure: ClassifiedFailure) -> None:
         append_jsonl(self.memory_dir / "classified_failures.jsonl", failure)
 
@@ -223,12 +509,11 @@ class ResearchMemory:
         return list(latest.values())
 
     def load_artifacts(self) -> list[ArtifactRecord]:
-        return self._load_registry(
-            self.artifacts_dir / "artifact_registry.jsonl",
-            ArtifactRecord,
-            "canonical_id",
-            fallback_key="artifact_id",
-        )
+        records = [
+            ArtifactRecord.model_validate(item)
+            for item in read_jsonl(self.artifacts_dir / "artifact_registry.jsonl")
+        ]
+        return _normalize_loaded_artifacts(records, preferred_root=self.root)
 
     def load_repositories(self) -> list[RepositoryRecord]:
         return self._load_registry(

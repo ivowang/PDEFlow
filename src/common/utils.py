@@ -22,8 +22,8 @@ def slugify(value: str) -> str:
     return lowered.strip("-") or "item"
 
 
-def short_hash(*parts: str) -> str:
-    digest = hashlib.sha1("::".join(parts).encode("utf-8")).hexdigest()
+def short_hash(*parts: object) -> str:
+    digest = hashlib.sha1("::".join(str(part) for part in parts).encode("utf-8")).hexdigest()
     return digest[:10]
 
 

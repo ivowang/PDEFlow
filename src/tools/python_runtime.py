@@ -79,7 +79,7 @@ class PythonRuntimeDiscoveryMixin:
         preferred_spec = self._preferred_python_spec(project_root, python_spec)
         if preferred_spec:
             find_result = self.run_command(
-                f"uv python find {shlex.quote(preferred_spec)}",
+                f"{self._uv_command_prefix()} uv python find {shlex.quote(preferred_spec)}",
                 cwd=self.repo_root,
                 allow_failure=True,
                 emit_progress=False,
@@ -89,7 +89,7 @@ class PythonRuntimeDiscoveryMixin:
             if self.config.execution.allow_package_installation and self.config.execution.network_enabled:
                 install_result = self.run_command(
                     (
-                        "uv python install "
+                        f"{self._uv_command_prefix()} uv python install "
                         f"--install-dir {shlex.quote(str(self.managed_python_root))} "
                         f"{shlex.quote(preferred_spec)}"
                     ),
@@ -98,7 +98,7 @@ class PythonRuntimeDiscoveryMixin:
                 )
                 if install_result["returncode"] == 0:
                     find_result = self.run_command(
-                        f"uv python find {shlex.quote(preferred_spec)}",
+                        f"{self._uv_command_prefix()} uv python find {shlex.quote(preferred_spec)}",
                         cwd=self.repo_root,
                         allow_failure=True,
                         emit_progress=False,

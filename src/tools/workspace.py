@@ -109,7 +109,7 @@ class WorkspaceToolsMixin:
 
     def copy_tree(self, source_path: str, destination_path: str) -> dict[str, Any]:
         source = self._resolve_path(source_path)
-        destination = self._resolve_path(destination_path, default_root=self.run_workspace_root)
+        destination = self._resolve_managed_write_path(destination_path, default_root=self.run_workspace_root)
         if destination.exists():
             raise FileExistsError(f"Destination already exists: {destination}")
         ensure_dir(destination.parent)
@@ -119,7 +119,7 @@ class WorkspaceToolsMixin:
         return payload
 
     def write_text_file(self, path: str, content: str) -> dict[str, Any]:
-        resolved = self._resolve_path(path, default_root=self.run_workspace_root)
+        resolved = self._resolve_managed_write_path(path, default_root=self.run_workspace_root)
         ensure_dir(resolved.parent)
         resolved.write_text(content, encoding="utf-8")
         payload = {"path": str(resolved), "chars": len(content)}
@@ -127,7 +127,7 @@ class WorkspaceToolsMixin:
         return payload
 
     def write_json_file(self, path: str, payload: Any) -> dict[str, Any]:
-        resolved = self._resolve_path(path, default_root=self.run_workspace_root)
+        resolved = self._resolve_managed_write_path(path, default_root=self.run_workspace_root)
         write_json(resolved, payload)
         result = {"path": str(resolved)}
         self._record_tool_event("write_json_file", result)

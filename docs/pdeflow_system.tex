@@ -118,23 +118,17 @@ The manager is responsible for:
 This dynamic routing is important in scientific workflows because downstream analysis is meaningless if prerequisites such as datasets, checkpoints, or valid environments are still missing. PDEFlow therefore treats missing external prerequisites as manager-level control signals rather than as local warnings that can be ignored. When the same blocker persists across multiple bounded recovery attempts, the manager can enter a dedicated human-intervention state, print a concrete request in the terminal, wait for a response, and then either revalidate files, change strategy, reduce scope, or abort the run.
 
 \subsection{Specialist Agents}
-The current implementation includes:
+The current implementation uses a compact specialist set:
 \begin{itemize}[leftmargin=1.5em]
   \item LiteratureAgent,
   \item AcquisitionAgent,
-  \item ProblemFramingAgent,
-  \item DiagnosisAgent,
-  \item HypothesisAgent,
-  \item MethodDesignAgent,
-  \item CoderAgent,
-  \item ExperimentPlannerAgent,
-  \item PreflightValidationAgent,
-  \item ExperimentAgent,
-  \item ReflectionAgent, and
+  \item ResearchStrategistAgent, which covers problem framing, diagnosis, hypothesis generation, and method design,
+  \item EngineeringAgent, which covers coding and experiment planning,
+  \item EvaluationAgent, which covers preflight validation, experiment execution, and reflection, and
   \item ReporterAgent.
 \end{itemize}
 
-Each agent is specialized by output contract rather than by autonomous social behavior.
+This reduces agent fragmentation while preserving the explicit research workflow. Each agent is specialized by output contract rather than by autonomous social behavior.
 
 \section{Phase-Structured Research Loop}
 The workflow is represented as an explicit state machine with a fixed phase vocabulary:
@@ -223,6 +217,8 @@ The memory layer stores:
 
 Program lineage is stored in SQLite so that parent-child relationships, evaluated candidates, and outcomes can be queried independently of the current run state.
 
+An important implementation detail is that the durable research memory is intentionally human-readable. In addition to structured JSONL indices, PDEFlow writes natural-language markdown notes under run-local directories such as \texttt{memory/episodes/}, \texttt{memory/evaluations/}, \texttt{memory/reflections/}, \texttt{memory/lessons/}, \texttt{memory/strategy/}, and \texttt{memory/evolution/}. These notes are generated from actual preflight reports, experiment outcomes, and reflection outputs rather than being treated as optional commentary. On later cycles, they are reloaded into shared state and supplied back to strategist, engineering, and evaluation phases so the system can reuse prior evidence and avoid rediscovering the same failures.
+
 In the current implementation, each run is anchored to a configured working directory. State snapshots, acquired assets, cloned repositories, child workspaces, managed Python environments, managed Python interpreters, experiment logs, process traces, and generated reports are all stored under that run-local root so that a research campaign remains self-contained on disk.
 
 \subsection{Unified Logging}
@@ -285,7 +281,7 @@ PDEFlow represents the transition from idea to evaluated implementation with a p
   \item record outcomes and lessons for future cycles.
 \end{enumerate}
 
-This abstraction is important because many scientific-agent systems fail to preserve the link between motivation, implementation, and result. PDEFlow explicitly preserves that chain.
+This abstraction is important because many scientific-agent systems fail to preserve the link between motivation, implementation, and result. PDEFlow explicitly preserves that chain. In the current implementation, preflight and experiment phases also generate explicit evaluation memos that summarize whether a candidate improved, regressed, or remained blocked relative to the best known evidence. Reflection then emits natural-language lessons and strategy notes. Together, these artifacts form the memory-driven self-evolution mechanism: later cycles read the accumulated evidence rather than starting from a blank prompt each time.
 
 \section{PDE Research As A Landing Domain}
 The initial landing domain is PDE neural operator research. This is a useful stress test because it requires the system to reason across:
@@ -312,6 +308,7 @@ The current repository provides a live, executable autonomous research scaffold 
   \item an exact-run preflight validation phase before experiment launch,
   \item autonomous acquisition and managed-environment tools,
   \item a persistent capability matrix and classified-failure memory,
+  \item a natural-language memory hierarchy for evaluation, reflection, lessons, and evolution,
   \item a local memory and lineage store, and
   \item markdown reporting from structured state.
 \end{itemize}

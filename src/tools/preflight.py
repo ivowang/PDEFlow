@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import shlex
 
+from common import plan_requires_fno, plan_requires_pinn
 from state import (
     ArtifactRecord,
     ArtifactStatus,
@@ -39,6 +40,10 @@ class PreflightValidationMixin:
         stripped = command.strip()
         return "python - <<" in stripped or "python -c " in stripped or stripped.startswith("python - <<")
 
+    def _looks_like_placeholder_command(self, command: str) -> bool:
+        lowered = command.lower()
+        return "launch command truncated" in lowered or "malformed output" in lowered
+
     def _infer_environment_path(self, plan: ExperimentPlan, capability_matrix: CapabilityMatrix | None) -> str | None:
         if plan.environment.get("VIRTUAL_ENV"):
             return plan.environment["VIRTUAL_ENV"]
@@ -57,7 +62,47 @@ class PreflightValidationMixin:
                 assignments[match.group(1)] = match.group(2).strip("'\"")
         return assignments
 
-    def _check_config_assignments(self, plan: ExperimentPlan) -> list[PreflightCheckResult]:
+    def _candidate_config_paths(self, config_name: str, working_directory: Path, entrypoint: Path | None) -> list[Path]:
+        candidate_roots = [working_directory]
+        if entrypoint is not None:
+            candidate_roots.extend(
+                [
+                    entrypoint.parent,
+                    entrypoint.parent / "config",
+                    entrypoint.parent.parent,
+                    entrypoint.parent.parent / "config",
+                ]
+            )
+        candidates: list[Path] = []
+        for root in candidate_roots:
+            candidates.extend(
+                [
+                    root / "config" / "args" / config_name,
+                    root / "config" / config_name,
+                    root / "args" / config_name,
+                    root / config_name,
+                ]
+            )
+        for root in candidate_roots:
+            try:
+                for match in root.rglob(config_name):
+                    candidates.append(match)
+                    if len(candidates) >= 32:
+                        break
+            except OSError:
+                continue
+            if len(candidates) >= 32:
+                break
+        deduped: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            path_str = str(candidate)
+            if path_str not in seen:
+                seen.add(path_str)
+                deduped.append(candidate)
+        return deduped
+
+    def _check_config_assignments(self, plan: ExperimentPlan, entrypoint: Path | None) -> list[PreflightCheckResult]:
         checks: list[PreflightCheckResult] = []
         assignments = self._parse_assignments(plan.launch_command)
         for key, value in assignments.items():
@@ -73,20 +118,57 @@ class PreflightValidationMixin:
         config_name = next((value for key, value in assignments.items() if key == "args"), None)
         if config_name:
             working_directory = Path(plan.working_directory)
-            config_paths = [
-                working_directory / "config" / "args" / config_name,
-                working_directory / "config" / config_name,
-                working_directory / config_name,
-            ]
+            config_paths = self._candidate_config_paths(config_name, working_directory, entrypoint)
             if not any(path.exists() for path in config_paths):
                 checks.append(
                     PreflightCheckResult(
                         name="config_exists",
                         passed=False,
                         category="config",
-                        details=f"Referenced config {config_name} was not found near {working_directory}.",
+                        details=(
+                            f"Referenced config {config_name} was not found near {working_directory} "
+                            f"or the resolved entrypoint."
+                        ),
                     )
                 )
+        return checks
+
+    def _check_capability_requirements(
+        self,
+        plan: ExperimentPlan,
+        capability_matrix: CapabilityMatrix | None,
+    ) -> list[PreflightCheckResult]:
+        if capability_matrix is None:
+            return []
+        checks: list[PreflightCheckResult] = []
+        if plan_requires_pinn(plan):
+            checks.append(
+                PreflightCheckResult(
+                    name="pinn_backend_ready",
+                    passed=capability_matrix.pinn_ready,
+                    category="environment",
+                    details=(
+                        "PINN route requires DeepXDE with a supported backend. "
+                        f"deepxde_installed={capability_matrix.deepxde_installed} "
+                        f"deepxde_backend={capability_matrix.deepxde_backend} "
+                        f"tensorflow_available={capability_matrix.tensorflow_available}"
+                    ),
+                )
+            )
+        if plan_requires_fno(plan):
+            checks.append(
+                PreflightCheckResult(
+                    name="fno_runtime_ready",
+                    passed=capability_matrix.fno_ready,
+                    category="environment",
+                    details=(
+                        "FNO route requires the PDEBench codepath, torch runtime, h5py, and a launch-ready environment. "
+                        f"fno_ready={capability_matrix.fno_ready} "
+                        f"torch_runtime_ready={capability_matrix.torch_runtime_ready} "
+                        f"h5py_available={capability_matrix.h5py_available}"
+                    ),
+                )
+            )
         return checks
 
     def preflight_experiment_plan(
@@ -100,7 +182,9 @@ class PreflightValidationMixin:
         if plan.job_kind != "experiment":
             recommended_route = plan.job_kind
             if plan.plan_id == "__no_executable_plans__":
-                if capability_matrix and capability_matrix.fallback_assets_available:
+                if capability_matrix and capability_matrix.target_dataset_preparing:
+                    recommended_route = "acquisition"
+                elif capability_matrix and capability_matrix.fallback_assets_available:
                     recommended_route = "fallback_execution"
                 elif capability_matrix and capability_matrix.target_dataset_blocked:
                     recommended_route = "acquisition"
@@ -135,12 +219,17 @@ class PreflightValidationMixin:
                 )
             )
         elif entrypoint is None:
+            details = "Could not resolve a Python entrypoint from the launch command."
+            if self._looks_like_placeholder_command(plan.launch_command):
+                details = (
+                    "Launch command appears to be malformed placeholder output rather than an executable program."
+                )
             checks.append(
                 PreflightCheckResult(
                     name="entrypoint_exists",
                     passed=False,
                     category="import",
-                    details="Could not resolve a Python entrypoint from the launch command.",
+                    details=details,
                 )
             )
         else:
@@ -162,9 +251,17 @@ class PreflightValidationMixin:
                 )
             )
 
-        checks.extend(self._check_config_assignments(plan))
+        checks.extend(self._check_config_assignments(plan, entrypoint))
+        checks.extend(self._check_capability_requirements(plan, capability_matrix))
 
-        required_artifacts = {item.artifact_id: item for item in artifacts if item.artifact_id in plan.required_artifact_ids}
+        required_artifacts: dict[str, ArtifactRecord] = {}
+        for item in artifacts:
+            keys = [item.artifact_id]
+            if item.canonical_id:
+                keys.append(item.canonical_id)
+            for key in keys:
+                if key in plan.required_artifact_ids and key not in required_artifacts:
+                    required_artifacts[key] = item
         for artifact_id in plan.required_artifact_ids:
             artifact = required_artifacts.get(artifact_id)
             if artifact is None:
@@ -191,7 +288,7 @@ class PreflightValidationMixin:
                 )
             )
 
-        log_path = self._resolve_path(plan.log_path, default_root=self.memory.experiments_dir)
+        log_path = self._resolve_managed_write_path(plan.log_path, default_root=self.memory.experiments_dir)
         ensure_dir(log_path.parent)
         writable_path = log_path.parent / ".preflight_write_test"
         try:
@@ -217,7 +314,10 @@ class PreflightValidationMixin:
 
         env_path = self._infer_environment_path(plan, capability_matrix)
         if env_path:
-            inspection = self.inspect_python_environment(env_path, modules=["torch", "h5py"])
+            inspection_modules = ["torch", "h5py"]
+            if plan_requires_pinn(plan):
+                inspection_modules.extend(["deepxde", "tensorflow"])
+            inspection = self.inspect_python_environment(env_path, modules=inspection_modules)
             checks.append(
                 PreflightCheckResult(
                     name="environment_python",
@@ -233,6 +333,7 @@ class PreflightValidationMixin:
                     allow_failure=True,
                     emit_progress=False,
                     job_kind="preflight",
+                    gpu_ids=plan.gpu_ids,
                 )
                 checks.append(
                     PreflightCheckResult(
@@ -240,6 +341,36 @@ class PreflightValidationMixin:
                         passed=cuda_probe["returncode"] == 0 and cuda_probe["stdout_tail"].strip().endswith("1"),
                         category="environment",
                         details=cuda_probe["stdout_tail"] or str(cuda_probe["stderr_tail"]),
+                    )
+                )
+            if plan_requires_pinn(plan):
+                backend_probe = self.run_in_environment(
+                    env_path,
+                    (
+                        "python - <<'PY'\n"
+                        "try:\n"
+                        "    import deepxde as dde\n"
+                        "    backend = getattr(getattr(dde, 'backend', None), 'backend_name', 'unknown')\n"
+                        "    print(backend)\n"
+                        "except Exception as exc:\n"
+                        "    raise SystemExit(f'{type(exc).__name__}: {exc}')\n"
+                        "PY"
+                    ),
+                    allow_failure=True,
+                    emit_progress=False,
+                    job_kind="preflight",
+                    stall_timeout_seconds=60,
+                    gpu_ids=plan.gpu_ids,
+                )
+                backend_name = backend_probe["stdout_tail"].splitlines()[-1].strip() if backend_probe["stdout_tail"] else None
+                details = backend_probe["stderr_tail"] or backend_probe["stdout_tail"] or "DeepXDE backend probe returned no output."
+                backend_ready = backend_probe["returncode"] == 0 and bool(backend_name)
+                checks.append(
+                    PreflightCheckResult(
+                        name="pinn_backend_import",
+                        passed=backend_ready,
+                        category="environment",
+                        details=details,
                     )
                 )
         elif capability_matrix:
@@ -258,7 +389,9 @@ class PreflightValidationMixin:
         recommended_route = None
         if failed_checks:
             categories = {item.category for item in failed_checks}
-            if "dataset" in categories or "artifact" in categories:
+            if any(item.name == "entrypoint_exists" and "placeholder" in item.details.lower() for item in failed_checks):
+                recommended_route = "planning"
+            elif "dataset" in categories or "artifact" in categories:
                 recommended_route = "acquisition"
             elif "environment" in categories or "import" in categories:
                 recommended_route = "environment_repair"

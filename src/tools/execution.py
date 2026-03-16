@@ -7,11 +7,27 @@ import shlex
 import subprocess
 import threading
 import time
+from typing import Any
 
 from common import ensure_dir, now_utc, short_hash
 
 
 class CommandExecutionMixin:
+    def _read_process_snapshot(self, pid: int) -> dict[str, Any]:
+        status_path = Path("/proc") / str(pid) / "status"
+        snapshot: dict[str, Any] = {"pid": pid}
+        try:
+            for line in status_path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("State:"):
+                    snapshot["state"] = line.split(":", 1)[1].strip()
+                elif line.startswith("VmRSS:"):
+                    snapshot["rss_kb"] = line.split(":", 1)[1].strip()
+                elif line.startswith("Threads:"):
+                    snapshot["threads"] = line.split(":", 1)[1].strip()
+        except OSError:
+            return snapshot
+        return snapshot
+
     def run_command(
         self,
         command: str,
@@ -28,7 +44,7 @@ class CommandExecutionMixin:
             raise RuntimeError("Shell command execution is disabled in the current config.")
         working_directory = self._resolve_path(str(cwd), default_root=self.repo_root) if cwd else self.repo_root
         log_file = (
-            self._resolve_path(log_path, default_root=self.memory.logs_dir)
+            self._resolve_managed_write_path(log_path, default_root=self.memory.logs_dir)
             if log_path
             else self.memory.command_logs_dir
             / f"cmd-{short_hash(command, str(working_directory), now_utc())}.log"
@@ -37,7 +53,16 @@ class CommandExecutionMixin:
         env = os.environ.copy()
         if env_overrides:
             env.update(env_overrides)
+        env.setdefault("PYTORCH_NVML_BASED_CUDA_CHECK", "1")
+        virtual_env = str(env.get("VIRTUAL_ENV") or "").strip()
+        if virtual_env:
+            env_bin = str((Path(virtual_env) / "bin").resolve())
+            existing_path = str(env.get("PATH") or "")
+            path_entries = existing_path.split(os.pathsep) if existing_path else []
+            if env_bin not in path_entries:
+                env["PATH"] = os.pathsep.join([env_bin, *path_entries]) if path_entries else env_bin
         if gpu_ids:
+            env.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
             env["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu_id) for gpu_id in gpu_ids)
         compact = command if len(command) <= 140 else command[:137] + "..."
         if emit_progress:
@@ -79,10 +104,17 @@ class CommandExecutionMixin:
                     )
                     return
                 suffix = f" last_output={last_line[:160]}" if last_line else ""
+                proc_snapshot = self._read_process_snapshot(process.pid)
+                proc_text = ""
+                if len(proc_snapshot) > 1:
+                    state = proc_snapshot.get("state", "unknown")
+                    rss = proc_snapshot.get("rss_kb", "unknown")
+                    threads = proc_snapshot.get("threads", "unknown")
+                    proc_text = f" pid={process.pid} state={state} rss={rss} threads={threads}"
                 self.memory.record_process(
                     "Command heartbeat: "
                     f"elapsed={elapsed}s cwd={working_directory} log={log_file} bytes={log_size}. "
-                    f"Command: {compact}.{suffix}"
+                    f"Command: {compact}.{proc_text}{suffix}"
                 )
 
         heartbeat_thread = (

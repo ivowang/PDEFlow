@@ -33,6 +33,23 @@ def summarize_state_delta(state: ResearchState) -> CycleDeltaRecord:
         for item in state.external_artifacts
         if item.status == ArtifactStatus.READY_FOR_TRAINING.value
     )
+    pending_artifacts = sorted(
+        (
+            item.canonical_id or item.artifact_id,
+            item.status,
+            str(
+                (item.validation.size_bytes if item.validation else 0)
+                or (item.download_metadata.bytes_downloaded if item.download_metadata else 0)
+            ),
+        )
+        for item in state.external_artifacts
+        if item.status in {
+            ArtifactStatus.DOWNLOADED.value,
+            ArtifactStatus.CHECKSUM_VERIFIED.value,
+            ArtifactStatus.FORMAT_VERIFIED.value,
+            ArtifactStatus.VERIFIED_REMOTE.value,
+        }
+    )
     blocked_artifacts = sorted(
         (item.canonical_id or item.artifact_id)
         for item in state.external_artifacts
@@ -48,6 +65,7 @@ def summarize_state_delta(state: ResearchState) -> CycleDeltaRecord:
     )
     snapshot_signature = short_hash(
         "|".join(ready_artifacts),
+        "|".join("::".join(item) for item in pending_artifacts),
         "|".join(blocked_artifacts),
         "|".join(ready_envs),
         str(state.capability_matrix.model_dump(mode="python") if state.capability_matrix else {}),
@@ -64,6 +82,11 @@ def summarize_state_delta(state: ResearchState) -> CycleDeltaRecord:
     new_envs = sorted(set(ready_envs) - set(previous.newly_ready_environments if previous else []))
     if new_ready:
         summary.append(f"new_ready_artifacts={','.join(new_ready)}")
+    if pending_artifacts:
+        summary.append(
+            "pending_artifacts="
+            + ",".join(f"{artifact_id}:{status}" for artifact_id, status, _ in pending_artifacts[:6])
+        )
     if new_blocked:
         summary.append(f"new_blocked_artifacts={','.join(new_blocked)}")
     if new_envs:
@@ -84,7 +107,12 @@ def summarize_state_delta(state: ResearchState) -> CycleDeltaRecord:
 def _classify_artifact_blocker(artifact: ArtifactRecord, cycle_index: int) -> BlockerRecord | None:
     if artifact.artifact_type != "dataset":
         return None
-    if artifact.status == ArtifactStatus.READY_FOR_TRAINING.value:
+    if artifact.status not in {
+        ArtifactStatus.BLOCKED.value,
+        ArtifactStatus.CORRUPTED.value,
+        ArtifactStatus.QUARANTINED.value,
+        ArtifactStatus.DOWNLOAD_FAILED.value,
+    }:
         return None
     blocker_type = "dataset_acquisition_failure"
     evidence_parts = [f"status={artifact.status}"]
@@ -135,6 +163,25 @@ def _capability_blockers(capability: CapabilityMatrix | None, cycle_index: int, 
     blockers: list[BlockerRecord] = []
     if capability is None:
         return blockers
+    if capability.environment_repair_needed:
+        blockers.append(
+            BlockerRecord(
+                blocker_id=f"blocker-{short_hash('environment_runtime_failure', capability.environment_path or baseline_program_id or 'baseline')}",
+                blocker_type="environment_runtime_failure",
+                target_entity=capability.environment_path or baseline_program_id or "baseline-env",
+                first_seen_cycle=cycle_index,
+                last_seen_cycle=cycle_index,
+                last_attempt_signature="gpu_runtime_unavailable",
+                evidence_summary=(
+                    f"torch_runtime_ready={capability.torch_runtime_ready} "
+                    f"cuda_available={capability.cuda_available} "
+                    f"gpu_runtime_required={capability.gpu_runtime_required} "
+                    f"torch_version={capability.torch_version or 'unknown'} "
+                    f"torch_cuda_version={capability.torch_cuda_version or 'unknown'}"
+                ),
+                recommended_pivots=["environment_repair", "fallback_execution"],
+            )
+        )
     if capability.target_dataset_blocked:
         blockers.append(
             BlockerRecord(
@@ -148,7 +195,14 @@ def _capability_blockers(capability: CapabilityMatrix | None, cycle_index: int, 
                 recommended_pivots=["local_discovery", "mirror_resolution", "fallback_execution", "terminate_blocked"],
             )
         )
-    if capability.env_ready and capability.codepath_ready and not capability.baseline_launch_ready:
+    if (
+        capability.env_ready
+        and capability.codepath_ready
+        and not capability.baseline_launch_ready
+        and not capability.environment_repair_needed
+        and not capability.target_dataset_blocked
+        and not capability.target_dataset_preparing
+    ):
         blockers.append(
             BlockerRecord(
                 blocker_id=f"blocker-{short_hash('baseline_not_launch_ready', baseline_program_id or 'baseline')}",
@@ -241,7 +295,4 @@ def refresh_blocker_registry(
             }
         )
 
-    for blocker_id, previous in existing.items():
-        if blocker_id not in refreshed:
-            refreshed[blocker_id] = previous
     return list(refreshed.values()), cycle_delta

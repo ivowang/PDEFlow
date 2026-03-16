@@ -10,6 +10,14 @@ from .identity import (
     repo_resolution_keys,
 )
 from .openai_agents_sdk import load_openai_agents_sdk
+from .plan_analysis import (
+    extract_plan_tee_outputs,
+    plan_is_baseline,
+    plan_prefers_fallback,
+    plan_requires_fno,
+    plan_requires_pinn,
+    plan_signal_text,
+)
 from .utils import (
     append_jsonl,
     dedupe_strings,
@@ -40,6 +48,12 @@ __all__ = [
     "load_openai_agents_sdk",
     "now_utc",
     "normalize_numeric_token",
+    "extract_plan_tee_outputs",
+    "plan_is_baseline",
+    "plan_prefers_fallback",
+    "plan_requires_fno",
+    "plan_requires_pinn",
+    "plan_signal_text",
     "read_json",
     "read_jsonl",
     "repo_resolution_keys",

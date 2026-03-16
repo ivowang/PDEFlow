@@ -16,6 +16,9 @@ class ReporterAgent(BaseResearchAgent):
     def allowed_tool_names(self) -> set[str] | None:
         return {"write_report"}
 
+    def runtime_timeout_seconds(self) -> int | None:
+        return 300
+
     def build_instructions(self, state: ResearchState) -> str:
         return """
 You are the reporting specialist.
@@ -44,7 +47,9 @@ Rules:
             "hypotheses": [item.model_dump(mode="python") for item in state.hypotheses],
             "method_designs": [item.model_dump(mode="python") for item in state.method_designs],
             "experiment_records": [item.model_dump(mode="python") for item in state.experiment_records],
+            "evaluation_memos": [item.model_dump(mode="python") for item in state.evaluation_memos],
             "reflections": [item.model_dump(mode="python") for item in state.reflections],
+            "memory_notes": [item.model_dump(mode="python") for item in state.memory_notes],
             "next_actions": state.next_actions,
             "report_directory": str(tools.memory.reports_dir),
         }

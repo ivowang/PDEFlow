@@ -3,30 +3,48 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from common import canonicalize_artifact_id
 from state import ArtifactRecord, BlockerRecord, ResearchState
 
 
 _ABS_PATH_RE = re.compile(r"(/[^ \n\t\"']+)")
+_TRAILING_PATH_PUNCTUATION = ";,)]}:"
+_HITL_BLOCKER_TYPES = {
+    "dataset_acquisition_failure",
+    "env_resolution_failure",
+    "repo_unavailable",
+    "backend_missing",
+}
 
 
-def should_trigger_hitl(
+def select_hitl_blockers(
     state: ResearchState,
     repeat_threshold: int,
     strategy_threshold: int,
+    *,
+    allow_active: bool = False,
 ) -> list[BlockerRecord]:
     if not state.blocker_registry:
         return []
+    if state.capability_matrix and state.capability_matrix.target_dataset_preparing:
+        return []
     candidates: list[BlockerRecord] = []
     for blocker in state.blocker_registry:
-        if blocker.blocker_type not in {
-            "dataset_acquisition_failure",
-            "env_resolution_failure",
-            "repo_unavailable",
-            "backend_missing",
-            "baseline_not_launch_ready",
+        if blocker.blocker_type not in _HITL_BLOCKER_TYPES:
+            continue
+        if not blocker.route_exhausted and blocker.terminality not in {
+            "persistent",
+            "likely_unrecoverable_in_current_route",
         }:
             continue
         if blocker.repeat_count < repeat_threshold and not blocker.route_exhausted:
+            continue
+        autonomous_options = {
+            item
+            for item in blocker.recommended_pivots
+            if item not in {"terminate_blocked", "manual_intervention"}
+        }
+        if autonomous_options and not autonomous_options.issubset(set(blocker.recovery_strategies_tried)):
             continue
         if len(blocker.recovery_strategies_tried) < strategy_threshold and not blocker.route_exhausted:
             continue
@@ -34,18 +52,61 @@ def should_trigger_hitl(
     if not candidates:
         return []
     latest = state.hitl_events[-1] if state.hitl_events else None
-    if latest and latest.status in {"requested", "still_blocked"}:
+    if not allow_active and latest and latest.status in {"requested", "still_blocked"}:
         return []
     return candidates
+
+
+def should_trigger_hitl(
+    state: ResearchState,
+    repeat_threshold: int,
+    strategy_threshold: int,
+) -> list[BlockerRecord]:
+    return select_hitl_blockers(
+        state,
+        repeat_threshold,
+        strategy_threshold,
+        allow_active=False,
+    )
 
 
 def blocked_artifacts_for_hitl(state: ResearchState, blockers: list[BlockerRecord]) -> list[ArtifactRecord]:
     targets = {item.target_entity for item in blockers}
     selected: list[ArtifactRecord] = []
     for artifact in state.external_artifacts:
-        canonical = artifact.canonical_id or artifact.artifact_id
-        if canonical in targets or artifact.artifact_id in targets:
-            selected.append(artifact)
+        artifact_aliases = {
+            alias
+            for alias in [
+                artifact.canonical_id,
+                artifact.artifact_id,
+                *artifact.raw_aliases,
+            ]
+            if alias
+        }
+        semantic_payload = (
+            artifact.semantic_spec.model_dump(exclude_none=True)
+            if artifact.semantic_spec is not None
+            else {}
+        )
+        for target in list(targets):
+            target_aliases = {target}
+            target_canonical, _ = canonicalize_artifact_id(
+                target,
+                local_path=artifact.local_path,
+                title=artifact.title,
+                metadata={
+                    **semantic_payload,
+                    **artifact.metadata,
+                },
+                artifact_type=artifact.artifact_type,
+            )
+            if target_canonical:
+                target_aliases.add(target_canonical)
+            if artifact_aliases.intersection(target_aliases):
+                selected.append(artifact)
+                break
+        else:
+            continue
     return selected
 
 
@@ -97,4 +158,9 @@ def build_hitl_prompt(
 
 
 def extract_absolute_paths(text: str) -> list[str]:
-    return sorted(dict.fromkeys(match.group(1) for match in _ABS_PATH_RE.finditer(text)))
+    cleaned: list[str] = []
+    for match in _ABS_PATH_RE.finditer(text):
+        candidate = match.group(1).rstrip(_TRAILING_PATH_PUNCTUATION)
+        if candidate:
+            cleaned.append(candidate)
+    return sorted(dict.fromkeys(cleaned))

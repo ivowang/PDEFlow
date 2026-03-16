@@ -23,6 +23,8 @@ class RuntimeConfig(BaseModel):
     provider: str = "openai"
     model: str = "gpt-4.1"
     max_turns: int = 32
+    max_output_tokens: int = 4096
+    request_timeout_seconds: int = 120
     api_key_env_var: str | None = None
     api_base_url: str | None = None
     websocket_base_url: str | None = None
@@ -41,10 +43,10 @@ class RetrievalConfig(BaseModel):
     max_search_results: int = 10
     default_min_dataset_size_bytes: int = 1_048_576
     download_chunk_size_bytes: int = 1_048_576
-    no_progress_timeout_seconds: int = 180
-    min_transfer_throughput_bytes_per_second: int = 16_384
-    throughput_window_seconds: int = 60
-    max_transfer_attempts: int = 3
+    no_progress_timeout_seconds: int = 900
+    min_transfer_throughput_bytes_per_second: int = 1_024
+    throughput_window_seconds: int = 120
+    max_transfer_attempts: int = 6
     quarantine_corrupted_artifacts: bool = True
 
 
@@ -53,6 +55,7 @@ class ExecutionConfig(BaseModel):
     auto_bootstrap_environments: bool = True
     allow_shell_commands: bool = True
     allow_package_installation: bool = True
+    experiment_no_progress_timeout_seconds: int = 900
     hitl_enabled: bool = True
     hitl_blocker_repeat_threshold: int = 3
     hitl_strategy_threshold: int = 2

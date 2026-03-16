@@ -4,6 +4,7 @@ from .analysis import (
     HypothesisAgent,
     MethodDesignAgent,
     ProblemFramingAgent,
+    ResearchStrategistAgent,
 )
 from .discovery import (
     AcquisitionAgent,
@@ -11,6 +12,8 @@ from .discovery import (
 )
 from .execution import (
     CoderAgent,
+    EngineeringAgent,
+    EvaluationAgent,
     ExperimentAgent,
     ExperimentPlannerAgent,
     PreflightValidationAgent,
@@ -25,6 +28,8 @@ __all__ = [
     "AcquisitionAgent",
     "CoderAgent",
     "DiagnosisAgent",
+    "EngineeringAgent",
+    "EvaluationAgent",
     "ExperimentAgent",
     "ExperimentPlannerAgent",
     "HypothesisAgent",
@@ -32,6 +37,7 @@ __all__ = [
     "MethodDesignAgent",
     "PreflightValidationAgent",
     "ProblemFramingAgent",
+    "ResearchStrategistAgent",
     "ReflectionAgent",
     "ReporterAgent",
 ]

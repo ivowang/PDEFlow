@@ -7,14 +7,16 @@ from common import load_openai_agents_sdk
 from config import RuntimeConfig
 
 try:
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, OpenAI
 except ImportError:  # pragma: no cover
     AsyncOpenAI = None
+    OpenAI = None
 
 try:
     _sdk = load_openai_agents_sdk()
     Agent = getattr(_sdk, "Agent", None)
     OpenAIProvider = getattr(_sdk, "OpenAIProvider", None)
+    ModelSettings = getattr(_sdk, "ModelSettings", None)
     RunConfig = getattr(_sdk, "RunConfig", None)
     Runner = getattr(_sdk, "Runner", None)
     SQLiteSession = getattr(_sdk, "SQLiteSession", None)
@@ -23,6 +25,7 @@ try:
 except ImportError:  # pragma: no cover
     Agent = None
     OpenAIProvider = None
+    ModelSettings = None
     RunConfig = None
     Runner = None
     SQLiteSession = None
@@ -69,7 +72,7 @@ class RuntimeProviderMixin:
                 "This repository no longer ships a mock runtime. "
                 "Set runtime.backend to 'openai_agents'."
             )
-        if Agent is None or Runner is None or OpenAIProvider is None or AsyncOpenAI is None:
+        if Agent is None or Runner is None or OpenAIProvider is None or AsyncOpenAI is None or OpenAI is None:
             raise RuntimeError(
                 "openai-agents and openai are not installed in the active environment. Run `uv sync` first."
             )
@@ -96,19 +99,29 @@ class RuntimeProviderMixin:
                 return None
 
     def _build_model_provider(self) -> Any:
+        client = self._build_openai_client()
+        use_responses = self._resolved_use_responses_api()
+
+        if self._resolved_provider() == "openai":
+            return OpenAIProvider(
+                openai_client=client,
+                websocket_base_url=self.runtime_config.websocket_base_url,
+                use_responses=use_responses,
+            )
+        return OpenAIProvider(openai_client=client, use_responses=use_responses)
+
+    def _build_openai_client(self) -> Any:
         provider_name = self._resolved_provider()
         api_key = self._resolved_api_key()
         base_url = self._resolved_base_url()
-        use_responses = self._resolved_use_responses_api()
 
         if provider_name == "openai":
-            return OpenAIProvider(
+            return AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url,
-                websocket_base_url=self.runtime_config.websocket_base_url,
                 organization=self.runtime_config.organization,
                 project=self.runtime_config.project,
-                use_responses=use_responses,
+                timeout=self.runtime_config.request_timeout_seconds,
             )
 
         default_headers: dict[str, str] = {}
@@ -119,19 +132,56 @@ class RuntimeProviderMixin:
         if app_name:
             default_headers["X-Title"] = app_name
 
-        client = AsyncOpenAI(
+        return AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
             default_headers=default_headers or None,
+            timeout=self.runtime_config.request_timeout_seconds,
         )
-        return OpenAIProvider(openai_client=client, use_responses=use_responses)
 
-    def _build_run_config(self, specialist_name: str) -> Any | None:
+    def _build_sync_openai_client(self) -> Any:
+        provider_name = self._resolved_provider()
+        api_key = self._resolved_api_key()
+        base_url = self._resolved_base_url()
+
+        if provider_name == "openai":
+            return OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                organization=self.runtime_config.organization,
+                project=self.runtime_config.project,
+                timeout=self.runtime_config.request_timeout_seconds,
+            )
+
+        default_headers: dict[str, str] = {}
+        site_url = self.runtime_config.openrouter_site_url or os.getenv("OPENROUTER_SITE_URL")
+        app_name = self.runtime_config.openrouter_app_name or os.getenv("OPENROUTER_APP_NAME")
+        if site_url:
+            default_headers["HTTP-Referer"] = site_url
+        if app_name:
+            default_headers["X-Title"] = app_name
+
+        return OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            default_headers=default_headers or None,
+            timeout=self.runtime_config.request_timeout_seconds,
+        )
+
+    def _build_run_config(self, specialist_name: str, max_output_tokens: int | None = None) -> Any | None:
         if RunConfig is None:
             return None
         return RunConfig(
             model=self.model,
             model_provider=self._build_model_provider(),
+            model_settings=self._build_model_settings(max_output_tokens=max_output_tokens),
             workflow_name=f"pdeflow::{specialist_name.lower()}",
             tracing_disabled=self.runtime_config.tracing_disabled,
+        )
+
+    def _build_model_settings(self, max_output_tokens: int | None = None) -> Any | None:
+        if ModelSettings is None:
+            return None
+        return ModelSettings(
+            max_tokens=max_output_tokens or self.runtime_config.max_output_tokens,
         )

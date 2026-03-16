@@ -22,7 +22,7 @@ class StructuredOutputMixin:
         instructions: str,
         output_type: type[OutputT],
     ) -> str:
-        schema_json = json.dumps(output_type.model_json_schema(), ensure_ascii=False, indent=2)
+        schema_json = json.dumps(output_type.model_json_schema(), ensure_ascii=False, separators=(",", ":"))
         return (
             instructions.strip()
             + "\n\n"
@@ -78,7 +78,13 @@ class StructuredOutputMixin:
             if len(lines) >= 3:
                 stripped = "\n".join(lines[1:-1]).strip()
         try:
-            json.loads(stripped)
+            parsed = json.loads(stripped)
+            if isinstance(parsed, str):
+                nested = parsed.strip()
+                nested_parsed = json.loads(nested)
+                if isinstance(nested_parsed, (dict, list)):
+                    return json.dumps(nested_parsed, ensure_ascii=False)
+                return nested
             return stripped
         except json.JSONDecodeError:
             pass
@@ -95,7 +101,33 @@ class StructuredOutputMixin:
         output_type: type[OutputT],
         error_message: str,
     ) -> OutputT:
-        schema_json = json.dumps(output_type.model_json_schema(), ensure_ascii=False, indent=2)
+        schema_json = json.dumps(output_type.model_json_schema(), ensure_ascii=False, separators=(",", ":"))
+        truncated_raw_text = raw_text[:4000]
+        direct_repair = getattr(self, "_run_direct_text_completion", None)
+        if callable(direct_repair):
+            repaired_text = direct_repair(
+                instructions=(
+                    "You repair malformed JSON emitted by another model.\n"
+                    "Rules:\n"
+                    "- Return exactly one valid JSON object.\n"
+                    "- Preserve the original semantic content whenever possible.\n"
+                    "- Only repair syntax, quoting, commas, brackets, truncation artifacts, or obviously broken schema formatting.\n"
+                    "- Do not add commentary or markdown fences.\n"
+                    "- Ensure the result validates against the provided schema."
+                ),
+                payload_text=json.dumps(
+                    {
+                        "schema": json.loads(schema_json),
+                        "validation_error": error_message,
+                        "malformed_output": truncated_raw_text,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                timeout_seconds=getattr(getattr(self, "runtime_config", None), "request_timeout_seconds", None),
+            )
+            repaired_payload = json.loads(self._extract_json_object_text(repaired_text))
+            return output_type.model_validate(repaired_payload)
         repair_agent = Agent(
             name="JsonRepairAgent",
             instructions=(
@@ -115,10 +147,10 @@ class StructuredOutputMixin:
             {
                 "schema": json.loads(schema_json),
                 "validation_error": error_message,
-                "malformed_output": raw_text,
+                "malformed_output": truncated_raw_text,
             },
             ensure_ascii=False,
-            indent=2,
+            separators=(",", ":"),
         )
         repair_result = Runner.run_sync(
             repair_agent,

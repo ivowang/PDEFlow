@@ -16,11 +16,13 @@ from .entities import (
     DiaryEntry,
     EnvironmentRecord,
     EnvironmentSnapshot,
+    EvaluationMemo,
     ExperimentPlan,
     ExperimentRecord,
     GeneratedReport,
     HITLEvent,
     HypothesisRecord,
+    MemoryNote,
     MethodDesign,
     PaperNote,
     PreflightReport,
@@ -86,12 +88,14 @@ class ResearchState(BaseModel):
     route_history: list[RouteDecisionRecord] = Field(default_factory=list)
     cycle_deltas: list[CycleDeltaRecord] = Field(default_factory=list)
     reflections: list[ReflectionRecord] = Field(default_factory=list)
+    evaluation_memos: list[EvaluationMemo] = Field(default_factory=list)
     hitl_events: list[HITLEvent] = Field(default_factory=list)
     human_guidance_notes: list[str] = Field(default_factory=list)
     manual_asset_roots: list[str] = Field(default_factory=list)
     skipped_target_entities: list[str] = Field(default_factory=list)
     semantic_memory_notes: list[str] = Field(default_factory=list)
     research_diary: list[DiaryEntry] = Field(default_factory=list)
+    memory_notes: list[MemoryNote] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
     generated_reports: list[GeneratedReport] = Field(default_factory=list)
     active_route_id: str | None = None

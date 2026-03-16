@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,8 @@ class ToolContext:
         self.config = config
         self.memory = memory
         self.repo_root = repo_root.resolve()
+        self.current_phase: str | None = None
+        self.current_cycle_index: int | None = None
         shared_root = Path(config.execution.workspace_root)
         if shared_root.is_absolute():
             resolved_shared_root = shared_root.resolve()
@@ -26,10 +29,16 @@ class ToolContext:
                 "execution.workspace_root must resolve inside execution.work_directory."
             )
         self.shared_workspace_root = ensure_dir(resolved_shared_root)
+        self.workspace_family_root = memory.root.parent.resolve()
         self.run_workspace_root = ensure_dir(memory.root / "workspaces")
         self.managed_env_root = ensure_dir(memory.root / "envs")
         self.managed_python_root = ensure_dir(memory.root / "pythons")
         self.quarantine_root = ensure_dir(memory.root / "quarantine")
+        self.uv_cache_root = ensure_dir(memory.root / ".uv-cache")
+
+    def set_runtime_context(self, *, phase: str | None = None, cycle_index: int | None = None) -> None:
+        self.current_phase = phase
+        self.current_cycle_index = cycle_index
 
     def _progress_message_for_tool_event(self, tool_name: str, payload: dict[str, Any]) -> str | None:
         if tool_name == "inspect_secret_status":
@@ -55,6 +64,23 @@ class ToolContext:
                     f"strategy_id={strategy or 'unknown'} attempt_signature={attempt or 'unknown'}."
                 )
             return f"Downloaded file to {payload.get('path', '')}."
+        if tool_name == "download_progress":
+            path = payload.get("path", "")
+            size_bytes = int(payload.get("bytes_downloaded", 0) or 0)
+            elapsed = float(payload.get("elapsed_time", 0.0) or 0.0)
+            throughput = payload.get("average_throughput")
+            throughput_text = (
+                f"{float(throughput):.1f} B/s" if isinstance(throughput, (int, float)) and throughput is not None else "unknown"
+            )
+            return (
+                f"Download heartbeat for {path}: bytes_downloaded={size_bytes} "
+                f"elapsed={elapsed:.1f}s avg_throughput={throughput_text}."
+            )
+        if tool_name == "discover_local_artifacts":
+            return (
+                f"Local artifact discovery finished. query='{payload.get('query', '')}' "
+                f"results={payload.get('count', 0)} roots={payload.get('roots', [])}."
+            )
         if tool_name == "validate_artifact":
             return (
                 f"Validated artifact {payload.get('artifact_id', '')}: "
@@ -66,6 +92,7 @@ class ToolContext:
                 f"repo_ready={payload.get('repo_ready', False)} "
                 f"env_ready={payload.get('env_ready', False)} "
                 f"baseline_ready={payload.get('baseline_ready_to_launch', False)} "
+                f"cuda_ready={payload.get('gpu_runtime_ready', False)} "
                 f"target_dataset_ready={payload.get('target_dataset_ready', False)}."
             )
         if tool_name == "preflight_experiment_plan":
@@ -130,13 +157,24 @@ class ToolContext:
         if progress_message:
             self.memory.record_process(progress_message)
 
-    def _allowed_roots(self) -> list[Path]:
-        return [
+    def _allowed_roots(self, include_workspace_family: bool = True) -> list[Path]:
+        roots = [
             self.repo_root,
             self.shared_workspace_root,
             self.memory.root.resolve(),
             self.run_workspace_root.resolve(),
+            self.managed_env_root.resolve(),
+            self.managed_python_root.resolve(),
+            self.quarantine_root.resolve(),
         ]
+        if include_workspace_family:
+            roots.append(self.workspace_family_root)
+        deduped: list[Path] = []
+        for root in roots:
+            resolved = root.resolve()
+            if resolved not in deduped:
+                deduped.append(resolved)
+        return deduped
 
     def _command_requires_shell(self, command: str) -> bool:
         stripped = command.strip()
@@ -148,11 +186,48 @@ class ToolContext:
         first_token = stripped.split()[0]
         return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=.*", first_token))
 
-    def _resolve_path(self, path_str: str, default_root: Path | None = None) -> Path:
+    def _uv_command_prefix(self, **extra_env: str) -> str:
+        env_parts = [
+            "env",
+            f"UV_CACHE_DIR={shlex.quote(str(self.uv_cache_root))}",
+            "UV_LINK_MODE=copy",
+        ]
+        for key, value in extra_env.items():
+            env_parts.append(f"{key}={shlex.quote(str(value))}")
+        return " ".join(env_parts)
+
+    def _is_within_allowed_roots(
+        self,
+        path: Path,
+        *,
+        allow_workspace_family: bool = True,
+    ) -> bool:
+        resolved = path.resolve()
+        return any(
+            str(resolved).startswith(str(root))
+            for root in self._allowed_roots(include_workspace_family=allow_workspace_family)
+        )
+
+    def _is_within_managed_write_roots(self, path: Path) -> bool:
+        return self._is_within_allowed_roots(path, allow_workspace_family=False)
+
+    def _resolve_path(
+        self,
+        path_str: str,
+        default_root: Path | None = None,
+        *,
+        allow_workspace_family: bool = True,
+    ) -> Path:
         raw_path = Path(path_str)
         candidate = raw_path if raw_path.is_absolute() else (default_root or self.repo_root) / raw_path
         resolved = candidate.resolve()
-        allowed = any(str(resolved).startswith(str(root)) for root in self._allowed_roots())
-        if not allowed:
+        if not self._is_within_allowed_roots(resolved, allow_workspace_family=allow_workspace_family):
             raise ValueError(f"Path is outside managed roots: {resolved}")
         return resolved
+
+    def _resolve_managed_write_path(self, path_str: str, default_root: Path | None = None) -> Path:
+        return self._resolve_path(
+            path_str,
+            default_root=default_root,
+            allow_workspace_family=False,
+        )

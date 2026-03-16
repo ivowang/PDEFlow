@@ -340,7 +340,16 @@ class CapabilityMatrix(BaseModel):
     python_available: bool = False
     pip_available: bool = False
     torch_available: bool = False
+    torch_import_ok: bool = False
+    torch_runtime_ready: bool = False
+    torch_version: str | None = None
+    torch_cuda_version: str | None = None
+    torch_runtime_error: str | None = None
+    torchvision_available: bool = False
+    torchvision_version: str | None = None
     cuda_available: bool = False
+    gpu_runtime_required: bool = False
+    gpu_runtime_ready: bool = False
     h5py_available: bool = False
     hydra_available: bool = False
     pdebench_trainable: bool = False
@@ -351,11 +360,15 @@ class CapabilityMatrix(BaseModel):
     fno_ready: bool = False
     unet_ready: bool = False
     target_dataset_ready: bool = False
+    target_dataset_preparing: bool = False
     target_dataset_blocked: bool = False
+    exact_target_shards_pending: list[str] = Field(default_factory=list)
     exact_target_shards_missing: list[str] = Field(default_factory=list)
     exact_target_shards_corrupted: list[str] = Field(default_factory=list)
     fallback_assets_available: bool = False
     baseline_ready_to_launch: bool = False
+    environment_repair_needed: bool = False
+    readiness_notes: list[str] = Field(default_factory=list)
     generated_at: str = Field(default_factory=now_utc)
 
 
@@ -416,6 +429,50 @@ class ReflectionRecord(BaseModel):
     failure_category: str | None = None
     continue_research: bool = False
     stop_reason: str | None = None
+    created_at: str = Field(default_factory=now_utc)
+
+
+class MemoryKind(str, Enum):
+    EPISODE = "episodes"
+    EVALUATION = "evaluations"
+    REFLECTION = "reflections"
+    LESSON = "lessons"
+    STRATEGY = "strategy"
+    EVOLUTION = "evolution"
+
+
+class MemoryNote(BaseModel):
+    note_id: str
+    kind: MemoryKind
+    title: str
+    summary: str
+    body: str
+    cycle_index: int = 0
+    phase: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    related_ids: dict[str, str] = Field(default_factory=dict)
+    path: str | None = None
+    created_at: str = Field(default_factory=now_utc)
+
+
+class EvaluationMemo(BaseModel):
+    memo_id: str
+    cycle_index: int
+    phase: str
+    verdict: str
+    support_level: str
+    summary: str
+    body: str
+    experiment_id: str | None = None
+    plan_id: str | None = None
+    program_id: str | None = None
+    hypothesis_id: str | None = None
+    compared_to: str | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    findings: list[str] = Field(default_factory=list)
+    failure_modes: list[str] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+    path: str | None = None
     created_at: str = Field(default_factory=now_utc)
 
 

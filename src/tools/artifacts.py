@@ -5,6 +5,7 @@ import json
 import shlex
 import shutil
 from pathlib import Path
+import subprocess
 import sys
 from typing import Any
 
@@ -24,17 +25,45 @@ from state import (
 
 
 class ArtifactValidationMixin:
+    def _effective_size_ok(self, size_ok: bool, checksum: ArtifactChecksumRecord | None) -> bool:
+        return size_ok or bool(checksum is not None and checksum.matched is True)
+
     def _candidate_hdf5_validation_pythons(self) -> list[str]:
-        candidates = [Path(sys.executable)]
-        candidates.extend(sorted(self.managed_env_root.glob("*/bin/python")))
+        candidates = sorted(self.managed_env_root.glob("*/bin/python"))
+        sibling_candidates = sorted(self.workspace_family_root.glob("*/envs/*/bin/python"))
+        candidates.extend(sibling_candidates)
+        candidates.append(Path(sys.executable))
         seen: set[str] = set()
         ordered: list[str] = []
         for candidate in candidates:
-            resolved = str(candidate.resolve())
-            if resolved not in seen and Path(resolved).exists():
-                seen.add(resolved)
-                ordered.append(resolved)
+            absolute = str(candidate.absolute())
+            if absolute not in seen and Path(absolute).exists():
+                seen.add(absolute)
+                ordered.append(absolute)
         return ordered
+
+    def _ensure_hdf5_validator_python(self) -> str | None:
+        validator_env = self.managed_env_root / "artifact-validator"
+        validator_python = validator_env / "bin" / "python"
+        if validator_python.exists():
+            return str(validator_python)
+        if not self.config.execution.auto_bootstrap_environments or not self.config.execution.allow_package_installation:
+            return None
+        bootstrap_python = shutil.which("python3") or sys.executable
+        create_command = (
+            "uv venv --seed --allow-existing "
+            f"--python {shlex.quote(str(bootstrap_python))} {shlex.quote(str(validator_env))}"
+        )
+        create_result = self.run_command(create_command, cwd=self.repo_root, allow_failure=True)
+        if create_result["returncode"] != 0 or not validator_python.exists():
+            return None
+        install_command = (
+            f"uv pip install --python {shlex.quote(str(validator_python))} h5py"
+        )
+        install_result = self.run_command(install_command, cwd=self.repo_root, allow_failure=True)
+        if install_result["returncode"] != 0:
+            return None
+        return str(validator_python)
 
     def _validate_hdf5_via_subprocess(
         self,
@@ -76,17 +105,27 @@ class ArtifactValidationMixin:
             "    payload['failure_reasons'].append('hdf5_open_failed:' + str(exc))\n"
             "print(json.dumps(payload))\n"
         )
-        for python_executable in self._candidate_hdf5_validation_pythons():
-            probe = self.run_command(
-                f"{shlex.quote(python_executable)} -c {shlex.quote(script)}",
-                cwd=path.parent,
-                allow_failure=True,
-                emit_progress=False,
-            )
-            if probe["returncode"] != 0 or not probe["stdout_tail"]:
+        candidate_pythons = self._candidate_hdf5_validation_pythons()
+        extra_validator = self._ensure_hdf5_validator_python()
+        if extra_validator and extra_validator not in candidate_pythons:
+            candidate_pythons.insert(0, extra_validator)
+        for python_executable in candidate_pythons:
+            try:
+                probe = subprocess.run(
+                    [python_executable, "-c", script],
+                    cwd=str(path.parent),
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            stdout = probe.stdout or ""
+            if probe.returncode != 0 or not stdout.strip():
                 continue
             try:
-                payload = json.loads(str(probe["stdout_tail"]).splitlines()[-1])
+                payload = json.loads(stdout.splitlines()[-1])
             except json.JSONDecodeError:
                 continue
             payload["validator_python"] = python_executable
@@ -126,27 +165,33 @@ class ArtifactValidationMixin:
 
     def _extract_checksum_record(self, artifact: ArtifactRecord, actual: str | None = None) -> ArtifactChecksumRecord | None:
         metadata = artifact.metadata or {}
+        download_checksum = artifact.download_metadata.checksum if artifact.download_metadata else None
         expected = (
             metadata.get("official_md5")
             or metadata.get("official_checksum")
             or metadata.get("expected_md5")
             or metadata.get("expected_checksum")
+            or (download_checksum.expected if download_checksum else None)
         )
         checksum_source = None
         if metadata.get("official_md5") or metadata.get("official_checksum"):
             checksum_source = "official_registry"
         elif expected:
             checksum_source = "artifact_metadata"
-        algorithm = str(metadata.get("checksum_algorithm") or "md5")
+        if checksum_source is None and download_checksum and download_checksum.expected:
+            checksum_source = download_checksum.source or "download_metadata"
+        algorithm = str(metadata.get("checksum_algorithm") or (download_checksum.algorithm if download_checksum else None) or "md5")
         if expected is None and actual is None:
             return None
         matched = None
         if expected is not None and actual is not None:
             matched = str(expected).strip().lower() == str(actual).strip().lower()
+        elif download_checksum is not None:
+            matched = download_checksum.matched
         return ArtifactChecksumRecord(
             algorithm=algorithm,
             expected=str(expected) if expected is not None else None,
-            actual=actual,
+            actual=actual or (download_checksum.actual if download_checksum else None),
             source=checksum_source,
             matched=matched,
         )
@@ -167,18 +212,29 @@ class ArtifactValidationMixin:
         details: dict[str, Any] = {}
         required_keys = list((artifact.metadata or {}).get("required_keys", []))
         format_valid = False
+        effective_size_ok = self._effective_size_ok(size_ok, checksum)
         if h5py is None:
             subprocess_payload = self._validate_hdf5_via_subprocess(path, required_keys)
             if subprocess_payload is None:
-                failure_reasons.append("h5py_unavailable")
+                failure_reasons.append("format_validator_unavailable")
+                if not effective_size_ok:
+                    failure_reasons.insert(0, f"size_below_minimum:{size_bytes}<{min_size_bytes}")
+                if checksum is not None and checksum.expected is not None and checksum.matched is False:
+                    failure_reasons.append("checksum_mismatch")
+                if checksum is not None and checksum.matched:
+                    status = ArtifactStatus.CHECKSUM_VERIFIED
+                elif effective_size_ok:
+                    status = ArtifactStatus.DOWNLOADED
+                else:
+                    status = ArtifactStatus.CORRUPTED
                 return ArtifactValidationResult(
                     validator="hdf5",
-                    status=ArtifactStatus.CORRUPTED,
+                    status=status,
                     exists=True,
                     size_bytes=size_bytes,
                     min_size_bytes=min_size_bytes,
                     size_ok=size_ok,
-                    format_valid=False,
+                    format_valid=None,
                     ready_for_training=False,
                     checksum=checksum,
                     failure_reasons=failure_reasons,
@@ -190,8 +246,8 @@ class ArtifactValidationMixin:
             failure_reasons.extend(list(subprocess_payload.get("failure_reasons", [])))
             format_valid = bool(subprocess_payload.get("format_valid", False))
             details.update({"validator_python": subprocess_payload.get("validator_python")})
-            ready = size_ok and format_valid and (checksum is None or checksum.matched is not False)
-            if not size_ok:
+            ready = effective_size_ok and format_valid and (checksum is None or checksum.matched is not False)
+            if not effective_size_ok:
                 failure_reasons.insert(0, f"size_below_minimum:{size_bytes}<{min_size_bytes}")
             if checksum is not None and checksum.expected is not None and checksum.matched is False:
                 failure_reasons.append("checksum_mismatch")
@@ -246,8 +302,8 @@ class ArtifactValidationMixin:
             failure_reasons.append(f"hdf5_open_failed:{exc}")
             format_valid = False
 
-        ready = size_ok and format_valid and (checksum is None or checksum.matched is not False)
-        if not size_ok:
+        ready = effective_size_ok and format_valid and (checksum is None or checksum.matched is not False)
+        if not effective_size_ok:
             failure_reasons.insert(0, f"size_below_minimum:{size_bytes}<{min_size_bytes}")
         if checksum is not None and checksum.expected is not None and checksum.matched is False:
             failure_reasons.append("checksum_mismatch")
@@ -284,11 +340,12 @@ class ArtifactValidationMixin:
         checksum: ArtifactChecksumRecord | None,
     ) -> ArtifactValidationResult:
         failure_reasons: list[str] = []
-        if not size_ok:
+        effective_size_ok = self._effective_size_ok(size_ok, checksum)
+        if not effective_size_ok:
             failure_reasons.append(f"size_below_minimum:{size_bytes}<{min_size_bytes}")
         if checksum is not None and checksum.expected is not None and checksum.matched is False:
             failure_reasons.append("checksum_mismatch")
-        ready = size_ok and (checksum is None or checksum.matched is not False)
+        ready = effective_size_ok and (checksum is None or checksum.matched is not False)
         if ready:
             status = ArtifactStatus.READY_FOR_TRAINING
         elif checksum is not None and checksum.matched:
@@ -339,6 +396,7 @@ class ArtifactValidationMixin:
                     "ready_for_training": False,
                 },
             )
+            self.memory.record_artifact(updated)
             return updated
 
         path = self._resolve_path(artifact.local_path, default_root=self.shared_workspace_root)
@@ -360,6 +418,7 @@ class ArtifactValidationMixin:
                     "ready_for_training": False,
                 },
             )
+            self.memory.record_artifact(updated)
             return updated
 
         size_bytes = path.stat().st_size
@@ -391,8 +450,18 @@ class ArtifactValidationMixin:
             else None,
             "quarantine_path": artifact.quarantine_path,
         }
+        metadata = artifact.metadata or {}
+        download_metadata = artifact.download_metadata
+        allow_quarantine = quarantine_on_failure
+        if metadata.get("human_provided") or metadata.get("manual_imported"):
+            allow_quarantine = False
+        if download_metadata and (
+            download_metadata.strategy_id in {"local_discovery", "manual_local_import"}
+            or download_metadata.source_type == "human_provided_local"
+        ):
+            allow_quarantine = False
         if not validation.ready_for_training and validation.status == ArtifactStatus.CORRUPTED and quarantine_on_failure:
-            if self.config.retrieval.quarantine_corrupted_artifacts:
+            if allow_quarantine and self.config.retrieval.quarantine_corrupted_artifacts:
                 quarantine_path = self._quarantine_artifact(artifact, path)
                 validation = validation.model_copy(update={"status": ArtifactStatus.QUARANTINED})
                 update_payload["validation"] = validation
@@ -407,4 +476,5 @@ class ArtifactValidationMixin:
                 "ready_for_training": validation.ready_for_training,
             },
         )
+        self.memory.record_artifact(updated)
         return updated

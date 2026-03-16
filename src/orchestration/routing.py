@@ -23,6 +23,13 @@ class ManagerRoutingMixin:
             if blocker.blocker_type == "dataset_acquisition_failure"
         ]
 
+    def _active_environment_blockers(self, state: ResearchState) -> list[object]:
+        return [
+            blocker
+            for blocker in state.blocker_registry
+            if blocker.blocker_type in {"env_resolution_failure", "environment_runtime_failure"}
+        ]
+
     def _build_recovery_route(self, route_id: str, reason: str, focus: tuple[str, ...]) -> CycleRoute:
         return CycleRoute(
             route_id=route_id,
@@ -44,6 +51,16 @@ class ManagerRoutingMixin:
             focus=focus,
         )
 
+    def _build_acquisition_only_route(self, route_id: str, reason: str, focus: tuple[str, ...]) -> CycleRoute:
+        return CycleRoute(
+            route_id=route_id,
+            phases=(
+                PhaseSpec(ResearchPhase.ACQUISITION, "acquisition", ("environment_snapshot", "external_artifacts", "repositories")),
+            ),
+            reason=reason,
+            focus=focus,
+        )
+
     def _select_cycle_route(self, state: ResearchState) -> CycleRoute:
         capability = state.capability_matrix
         latest_reflection = state.reflections[-1] if state.reflections else None
@@ -51,6 +68,8 @@ class ManagerRoutingMixin:
         no_material_change = bool(latest_delta and not latest_delta.changed)
         dataset_blockers = self._active_dataset_blockers(state)
         exhausted_dataset_blockers = [item for item in dataset_blockers if item.route_exhausted]
+        environment_blockers = self._active_environment_blockers(state)
+        exhausted_environment_blockers = [item for item in environment_blockers if item.route_exhausted]
         blocking_failure_types = {
             item.failure_type for item in state.classified_failures if item.blocking
         }
@@ -70,6 +89,16 @@ class ManagerRoutingMixin:
                 focus=("terminate_blocked",),
             )
 
+        if capability and capability.target_dataset_preparing and not capability.target_dataset_blocked:
+            return self._build_acquisition_only_route(
+                route_id="continue-dataset-preparation",
+                reason=(
+                    "Exact target datasets are still being prepared or validated. "
+                    "Continue acquisition and validation until they are training-ready instead of escalating or preflighting empty plans."
+                ),
+                focus=("complete_dataset_preparation", "environment_setup"),
+            )
+
         if capability and capability.baseline_launch_ready and self._latest_program_requires_coding(state):
             return CycleRoute(
                 route_id="coding-validation",
@@ -85,6 +114,51 @@ class ManagerRoutingMixin:
                 ),
                 focus=("coding", "baseline_execution"),
             )
+
+        if environment_blockers:
+            if (
+                capability
+                and capability.target_dataset_ready
+                and capability.env_ready
+                and capability.codepath_ready
+                and capability.scientific_iteration_ready
+            ):
+                return self._build_fallback_execution_route(
+                    reason=(
+                        "The exact target datasets and baseline codepath are ready, but the preferred GPU runtime is not launch-ready. "
+                        "Prefer an executable fallback evidence path over re-entering acquisition."
+                    ),
+                    focus=("fallback_execution", "cpu_validation"),
+                )
+            repair_attempted = self._route_history_contains(state, "repair-environment-runtime")
+            if not repair_attempted or not no_material_change:
+                return self._build_recovery_route(
+                    route_id="repair-environment-runtime",
+                    reason=(
+                        "Managed environment exists but runtime health is insufficient for the preferred baseline path. "
+                        "Repair the environment before planning or launch."
+                    ),
+                    focus=("environment_repair",),
+                )
+            if capability and capability.scientific_iteration_ready:
+                return self._build_fallback_execution_route(
+                    reason=(
+                        "GPU runtime repair attempts did not restore a launch-ready baseline route. "
+                        "Switch to a CPU-executable evidence path instead of repeating the same repair loop."
+                    ),
+                    focus=("fallback_execution", "cpu_validation"),
+                )
+            if no_material_change and exhausted_environment_blockers:
+                state.blocked_reason = (
+                    "Environment runtime repair has been exhausted with no material state change and no executable fallback route."
+                )
+                state.termination_decision = state.blocked_reason
+                return CycleRoute(
+                    route_id="blocked-terminal",
+                    phases=(PhaseSpec(ResearchPhase.REFLECTION, "reflection", ("reflections", "next_actions")),),
+                    reason=state.blocked_reason,
+                    focus=("terminate_blocked",),
+                )
 
         if dataset_blockers:
             tried_strategies = {
